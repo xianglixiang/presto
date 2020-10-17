@@ -14,6 +14,8 @@
 package io.prestosql.testing;
 
 import com.google.common.collect.ImmutableMap;
+import io.prestosql.Session;
+import io.prestosql.spi.type.TimeZoneKey;
 import org.testng.annotations.Test;
 
 import java.util.List;
@@ -729,17 +731,21 @@ public abstract class AbstractTestAggregations
         assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME)) FROM orders", "SELECT 969");
         assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME), 0.023) FROM orders", "SELECT 969");
 
+        Session session = Session.builder(getSession())
+                .setTimeZoneKey(TimeZoneKey.getTimeZoneKey("+08:35"))
+                .build();
+
         // test time with time zone
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 992");
-        assertQuery("SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 992");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE)) FROM orders", "SELECT 993");
+        assertQuery(session, "SELECT approx_distinct(CAST(from_unixtime(custkey) AS TIME WITH TIME ZONE), 0.023) FROM orders", "SELECT 993");
 
         // test short decimal
         assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(18, 0))) FROM orders", "SELECT 990");
         assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(18, 0)), 0.023) FROM orders", "SELECT 990");
 
         // test long decimal
-        assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(25, 20))) FROM orders", "SELECT 1013");
-        assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(25, 20)), 0.023) FROM orders", "SELECT 1013");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(25, 20))) FROM orders", "SELECT 988");
+        assertQuery("SELECT approx_distinct(CAST(custkey AS DECIMAL(25, 20)), 0.023) FROM orders", "SELECT 988");
 
         // test real
         assertQuery("SELECT approx_distinct(CAST(custkey AS REAL)) FROM orders", "SELECT 1006");

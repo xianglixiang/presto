@@ -22,6 +22,7 @@ import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.block.Block;
 import io.prestosql.spi.block.DictionaryBlock;
 import io.prestosql.spi.connector.ConnectorPageSource;
+import io.prestosql.spi.connector.EmptyPageSource;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
@@ -44,7 +45,6 @@ import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CURSOR_ERROR;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static java.util.Objects.requireNonNull;
-import static org.apache.hadoop.hive.ql.io.AcidUtils.deleteDeltaSubdir;
 
 @NotThreadSafe
 public class OrcDeletedRows
@@ -122,7 +122,7 @@ public class OrcDeletedRows
         private int positionCount;
         @Nullable
         private int[] validPositions;
-        private OptionalLong startRowId;
+        private final OptionalLong startRowId;
 
         public MaskDeletedRows(Page sourcePage, OptionalLong startRowId)
         {
@@ -211,7 +211,7 @@ public class OrcDeletedRows
                 FileSystem fileSystem = hdfsEnvironment.getFileSystem(sessionUser, path, configuration);
                 FileStatus fileStatus = hdfsEnvironment.doAs(sessionUser, () -> fileSystem.getFileStatus(path));
 
-                try (ConnectorPageSource pageSource = pageSourceFactory.createPageSource(fileStatus.getPath(), fileStatus.getLen())) {
+                try (ConnectorPageSource pageSource = pageSourceFactory.createPageSource(fileStatus.getPath(), fileStatus.getLen()).orElseGet(() -> new EmptyPageSource())) {
                     while (!pageSource.isFinished()) {
                         Page page = pageSource.getNextPage();
                         if (page != null) {
@@ -243,10 +243,7 @@ public class OrcDeletedRows
 
     private static Path createPath(AcidInfo acidInfo, AcidInfo.DeleteDeltaInfo deleteDeltaInfo, String fileName)
     {
-        Path directory = new Path(acidInfo.getPartitionLocation(), deleteDeltaSubdir(
-                deleteDeltaInfo.getMinWriteId(),
-                deleteDeltaInfo.getMaxWriteId(),
-                deleteDeltaInfo.getStatementId()));
+        Path directory = new Path(acidInfo.getPartitionLocation(), deleteDeltaInfo.getDirectoryName());
 
         // When direct insert is enabled base and delta directories contain bucket_[id]_[attemptId] files
         // but delete delta directories contain bucket files without attemptId so we have to remove it from filename.
@@ -254,7 +251,7 @@ public class OrcDeletedRows
             return new Path(directory, fileName.substring(0, fileName.lastIndexOf("_")));
         }
 
-        if (acidInfo != null && acidInfo.getOriginalFiles().size() > 0) {
+        if (acidInfo.getOriginalFiles().size() > 0) {
             // Original file format is different from delete delta, construct delete delta file path from bucket ID of original file.
             return AcidUtils.createBucketFile(directory, acidInfo.getBucketId());
         }

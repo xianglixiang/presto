@@ -17,7 +17,6 @@ import com.google.common.collect.ImmutableList;
 import com.google.inject.Module;
 import io.prestosql.tests.product.launcher.Extensions;
 import io.prestosql.tests.product.launcher.LauncherModule;
-import io.prestosql.tests.product.launcher.PathResolver;
 import io.prestosql.tests.product.launcher.env.EnvironmentConfig;
 import io.prestosql.tests.product.launcher.env.EnvironmentConfigFactory;
 import io.prestosql.tests.product.launcher.env.EnvironmentModule;
@@ -31,16 +30,20 @@ import picocli.CommandLine.Mixin;
 
 import javax.inject.Inject;
 
+import java.io.File;
 import java.io.FileDescriptor;
 import java.io.FileOutputStream;
 import java.io.PrintStream;
 import java.io.UnsupportedEncodingException;
 import java.nio.charset.Charset;
 import java.nio.file.Paths;
+import java.util.Optional;
+import java.util.concurrent.Callable;
 
 import static io.prestosql.tests.product.launcher.cli.Commands.runCommand;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
+import static picocli.CommandLine.ExitCode.OK;
 import static picocli.CommandLine.Option;
 
 @Command(
@@ -48,7 +51,7 @@ import static picocli.CommandLine.Option;
         description = "Describe tests suite",
         usageHelpAutoWidth = true)
 public class SuiteDescribe
-        implements Runnable
+        implements Callable<Integer>
 {
     private final Module additionalSuites;
     private final Module additionalEnvironments;
@@ -69,9 +72,9 @@ public class SuiteDescribe
     }
 
     @Override
-    public void run()
+    public Integer call()
     {
-        runCommand(
+        return runCommand(
                 ImmutableList.<Module>builder()
                         .add(new LauncherModule())
                         .add(new SuiteModule(additionalSuites))
@@ -83,8 +86,13 @@ public class SuiteDescribe
 
     public static class SuiteDescribeOptions
     {
+        private static final String DEFAULT_VALUE = "(default: ${DEFAULT-VALUE})";
+
         @Option(names = "--suite", paramLabel = "<suite>", description = "Name of the suite to describe", required = true)
         public String suite;
+
+        @Option(names = "--test-jar", paramLabel = "<jar>", description = "Path to test JAR " + DEFAULT_VALUE, defaultValue = "${product-tests.module}/target/${product-tests.module}-${project.version}-executable.jar")
+        public File testJar;
 
         public Module toModule()
         {
@@ -93,14 +101,14 @@ public class SuiteDescribe
     }
 
     public static class Execution
-            implements Runnable
+            implements Callable<Integer>
     {
         private final String suiteName;
+        private final File testJar;
         private final String config;
         private final SuiteFactory suiteFactory;
         private final EnvironmentConfigFactory configFactory;
         private final EnvironmentOptions environmentOptions;
-        private final PathResolver pathResolver;
         private final PrintStream out;
 
         @Inject
@@ -108,14 +116,13 @@ public class SuiteDescribe
                 SuiteDescribeOptions describeOptions,
                 SuiteFactory suiteFactory,
                 EnvironmentConfigFactory configFactory,
-                PathResolver pathResolver,
                 EnvironmentOptions environmentOptions)
         {
             this.suiteName = requireNonNull(describeOptions.suite, "describeOptions.suite is null");
+            this.testJar = requireNonNull(describeOptions.testJar, "describeOptions.testJar is null");
             this.config = requireNonNull(environmentOptions.config, "environmentOptions.config is null");
             this.suiteFactory = requireNonNull(suiteFactory, "suiteFactory is null");
             this.configFactory = requireNonNull(configFactory, "configFactory is null");
-            this.pathResolver = requireNonNull(pathResolver, "pathResolver is null");
             this.environmentOptions = requireNonNull(environmentOptions, "environmentOptions is null");
 
             try {
@@ -127,17 +134,19 @@ public class SuiteDescribe
         }
 
         @Override
-        public void run()
+        public Integer call()
         {
             Suite suite = suiteFactory.getSuite(suiteName);
             EnvironmentConfig config = configFactory.getConfig(this.config);
 
-            out.println(format("Suite '%s' with configuration '%s' consists of following test runs: ", suiteName, this.config));
+            out.printf("Suite '%s' with configuration '%s' consists of following test runs: \n", suiteName, this.config);
 
             for (SuiteTestRun testRun : suite.getTestRuns(config)) {
                 TestRun.TestRunOptions runOptions = createTestRunOptions(suiteName, testRun, config);
-                out.println(format("\npresto-product-tests-launcher/bin/run-launcher test run %s\n", OptionsPrinter.format(environmentOptions, runOptions)));
+                out.printf("\n%s test run %s\n\n", environmentOptions.launcherBin, OptionsPrinter.format(environmentOptions, runOptions));
             }
+
+            return OK;
         }
 
         private TestRun.TestRunOptions createTestRunOptions(String suiteName, SuiteTestRun suiteTestRun, EnvironmentConfig environmentConfig)
@@ -145,8 +154,10 @@ public class SuiteDescribe
             TestRun.TestRunOptions testRunOptions = new TestRun.TestRunOptions();
             testRunOptions.environment = suiteTestRun.getEnvironmentName();
             testRunOptions.testArguments = suiteTestRun.getTemptoRunArguments(environmentConfig);
-            testRunOptions.testJar = pathResolver.resolvePlaceholders(testRunOptions.testJar);
+            testRunOptions.testJar = testJar;
             testRunOptions.reportsDir = Paths.get(format("presto-product-tests/target/%s/%s/%s", suiteName, environmentConfig.getConfigName(), suiteTestRun.getEnvironmentName()));
+            testRunOptions.startupRetries = null;
+            testRunOptions.logsDirBase = Optional.empty();
             return testRunOptions;
         }
     }

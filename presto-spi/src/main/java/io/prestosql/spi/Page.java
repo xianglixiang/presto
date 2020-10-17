@@ -33,6 +33,7 @@ import static java.util.Objects.requireNonNull;
 public final class Page
 {
     public static final int INSTANCE_SIZE = ClassLayout.parseClass(Page.class).instanceSize();
+    private static final Block[] EMPTY_BLOCKS = new Block[0];
 
     /**
      * Visible to give trusted classes like {@link PageBuilder} access to a constructor that doesn't
@@ -52,6 +53,11 @@ public final class Page
     public Page(Block... blocks)
     {
         this(true, determinePositionCount(blocks), blocks);
+    }
+
+    public Page(int positionCount)
+    {
+        this(false, positionCount, EMPTY_BLOCKS);
     }
 
     public Page(int positionCount, Block... blocks)
@@ -327,6 +333,11 @@ public final class Page
             blocks[i] = this.blocks[i].copyPositions(retainedPositions, offset, length);
         }
         return wrapBlocksWithoutCopy(length, blocks);
+    }
+
+    public Page getColumns(int column)
+    {
+        return wrapBlocksWithoutCopy(positionCount, new Block[] {this.blocks[column]});
     }
 
     public Page getColumns(int... columns)

@@ -83,9 +83,9 @@ import static io.prestosql.type.DateTimes.scaleEpochMillisToMicros;
 import static io.prestosql.type.IntervalDayTimeType.INTERVAL_DAY_TIME;
 import static java.lang.String.format;
 import static java.util.Locale.ENGLISH;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.joda.time.DateTimeZone.UTC;
 import static org.testng.Assert.assertEquals;
-import static org.testng.Assert.assertThrows;
 import static org.testng.Assert.assertTrue;
 
 public class TestExpressionInterpreter
@@ -1140,7 +1140,7 @@ public class TestExpressionInterpreter
         assertOptimizedEquals("coalesce(unbound_integer * (2 * 3), 1 - 1, NULL)", "coalesce(6 * unbound_integer, 0)");
         assertOptimizedEquals("coalesce(unbound_integer * (2 * 3), 1.0E0/2.0E0, NULL)", "coalesce(6 * unbound_integer, 0.5E0)");
         assertOptimizedEquals("coalesce(unbound_integer, 2, 1.0E0/2.0E0, 12.34E0, NULL)", "coalesce(unbound_integer, 2.0E0, 0.5E0, 12.34E0)");
-        assertOptimizedMatches("coalesce(0 / 0 > 1, unbound_boolean, 0 / 0 = 0)",
+        assertOptimizedMatches("coalesce(0 / 0 < 1, unbound_boolean, 0 / 0 = 0)",
                 "coalesce(CAST(fail('fail') AS boolean), unbound_boolean)");
         assertOptimizedMatches("coalesce(unbound_long, unbound_long)", "unbound_long");
         assertOptimizedMatches("coalesce(2 * unbound_long, 2 * unbound_long)", "unbound_long * BIGINT '2'");
@@ -1286,11 +1286,21 @@ public class TestExpressionInterpreter
     @Test
     public void testInvalidLike()
     {
-        assertThrows(PrestoException.class, () -> optimize("unbound_string LIKE 'abc' ESCAPE ''"));
-        assertThrows(PrestoException.class, () -> optimize("unbound_string LIKE 'abc' ESCAPE 'bc'"));
-        assertThrows(PrestoException.class, () -> optimize("unbound_string LIKE '#' ESCAPE '#'"));
-        assertThrows(PrestoException.class, () -> optimize("unbound_string LIKE '#abc' ESCAPE '#'"));
-        assertThrows(PrestoException.class, () -> optimize("unbound_string LIKE 'ab#' ESCAPE '#'"));
+        assertThatThrownBy(() -> optimize("unbound_string LIKE 'abc' ESCAPE ''"))
+                .isInstanceOf(PrestoException.class)
+                .hasMessage("Escape string must be a single character");
+        assertThatThrownBy(() -> optimize("unbound_string LIKE 'abc' ESCAPE 'bc'"))
+                .isInstanceOf(PrestoException.class)
+                .hasMessage("Escape string must be a single character");
+        assertThatThrownBy(() -> optimize("unbound_string LIKE '#' ESCAPE '#'"))
+                .isInstanceOf(PrestoException.class)
+                .hasMessage("Escape character must be followed by '%', '_' or the escape character itself");
+        assertThatThrownBy(() -> optimize("unbound_string LIKE '#abc' ESCAPE '#'"))
+                .isInstanceOf(PrestoException.class)
+                .hasMessage("Escape character must be followed by '%', '_' or the escape character itself");
+        assertThatThrownBy(() -> optimize("unbound_string LIKE 'ab#' ESCAPE '#'"))
+                .isInstanceOf(PrestoException.class)
+                .hasMessage("Escape character must be followed by '%', '_' or the escape character itself");
     }
 
     @Test

@@ -14,15 +14,33 @@
 package io.prestosql.tests.product.launcher.env.configs;
 
 import com.google.common.base.Splitter;
+import com.google.common.base.Strings;
+import io.prestosql.tests.product.launcher.docker.DockerFiles;
+import io.prestosql.tests.product.launcher.env.Environment;
+
+import javax.inject.Inject;
 
 import java.util.List;
 import java.util.Optional;
 
+import static io.prestosql.tests.product.launcher.env.EnvironmentContainers.HADOOP;
+import static io.prestosql.tests.product.launcher.env.EnvironmentContainers.PRESTO;
+import static io.prestosql.tests.product.launcher.env.common.Hadoop.CONTAINER_HADOOP_INIT_D;
 import static java.lang.System.getenv;
+import static java.util.Objects.requireNonNull;
+import static org.testcontainers.utility.MountableFile.forHostPath;
 
 public class ConfigEnvBased
         extends ConfigDefault
 {
+    private final DockerFiles dockerFiles;
+
+    @Inject
+    public ConfigEnvBased(DockerFiles dockerFiles)
+    {
+        this.dockerFiles = requireNonNull(dockerFiles, "dockerFiles is null");
+    }
+
     @Override
     public String getHadoopBaseImage()
     {
@@ -69,6 +87,32 @@ public class ConfigEnvBased
                         .trimResults()
                         .splitToList(value))
                 .orElse(super.getExcludedTests());
+    }
+
+    @Override
+    public void extendEnvironment(Environment.Builder builder)
+    {
+        builder.configureContainers(container -> {
+            if (container.getLogicalName().startsWith(PRESTO)) {
+                String prestoInitScript = getenv("HADOOP_PRESTO_INIT_SCRIPT");
+
+                if (!Strings.isNullOrEmpty(prestoInitScript)) {
+                    container.withCopyFileToContainer(
+                            forHostPath(dockerFiles.getDockerFilesHostPath(prestoInitScript)),
+                            "/docker/presto-init.d/presto-init.sh");
+                }
+            }
+
+            if (container.getLogicalName().startsWith(HADOOP)) {
+                String hadoopInitScript = getenv("HADOOP_INIT_SCRIPT");
+
+                if (!Strings.isNullOrEmpty(hadoopInitScript)) {
+                    container.withCopyFileToContainer(
+                            forHostPath(dockerFiles.getDockerFilesHostPath(hadoopInitScript)),
+                            CONTAINER_HADOOP_INIT_D + "/hadoop-presto-init.sh");
+                }
+            }
+        });
     }
 
     private static String getEnvOrDefault(String envKey, String defaultValue)

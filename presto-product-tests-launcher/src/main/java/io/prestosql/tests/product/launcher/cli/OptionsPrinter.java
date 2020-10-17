@@ -20,6 +20,7 @@ import picocli.CommandLine.Parameters;
 import java.lang.reflect.Field;
 import java.util.Collection;
 import java.util.List;
+import java.util.Optional;
 
 import static java.lang.reflect.Modifier.isPublic;
 import static java.lang.reflect.Modifier.isStatic;
@@ -73,8 +74,15 @@ public final class OptionsPrinter
 
     private static String formatOption(Object value, Option annotation)
     {
+        if (annotation.hidden()) {
+            return null;
+        }
+
         if (value instanceof Boolean) {
             if ((boolean) value) {
+                return annotation.names()[0].replaceFirst("--no-", "--");
+            }
+            else if (annotation.negatable()) {
                 return annotation.names()[0];
             }
 
@@ -83,6 +91,19 @@ public final class OptionsPrinter
 
         if (value instanceof String && ((String) value).isBlank()) {
             return null;
+        }
+
+        if (value == null) {
+            return null;
+        }
+
+        if (value instanceof Optional) {
+            if (((Optional<?>) value).isPresent()) {
+                return formatOption(((Optional<?>) value).get(), annotation);
+            }
+            else {
+                return null;
+            }
         }
 
         return String.format("%s %s", annotation.names()[0], value);

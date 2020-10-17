@@ -42,11 +42,9 @@ import io.prestosql.spi.type.TimestampType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarcharType;
 
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetTime;
-import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
@@ -261,7 +259,7 @@ public class MaterializedResult
             type.writeLong(blockBuilder, ((Number) value).byteValue());
         }
         else if (REAL.equals(type)) {
-            type.writeLong(blockBuilder, (long) floatToRawIntBits(((Number) value).floatValue()));
+            type.writeLong(blockBuilder, floatToRawIntBits(((Number) value).floatValue()));
         }
         else if (DOUBLE.equals(type)) {
             type.writeDouble(blockBuilder, ((Number) value).doubleValue());
@@ -376,8 +374,7 @@ public class MaterializedResult
                 convertedValue = ((SqlTimestamp) prestoValue).toLocalDateTime();
             }
             else if (prestoValue instanceof SqlTimestampWithTimeZone) {
-                convertedValue = Instant.ofEpochMilli(((SqlTimestampWithTimeZone) prestoValue).getMillisUtc())
-                        .atZone(ZoneId.of(((SqlTimestampWithTimeZone) prestoValue).getTimeZoneKey().getId()));
+                convertedValue = ((SqlTimestampWithTimeZone) prestoValue).toZonedDateTime();
             }
             else if (prestoValue instanceof SqlDecimal) {
                 convertedValue = ((SqlDecimal) prestoValue).toBigDecimal();
@@ -388,17 +385,6 @@ public class MaterializedResult
             convertedValues.add(convertedValue);
         }
         return new MaterializedRow(prestoRow.getPrecision(), convertedValues);
-    }
-
-    private static ZoneOffset toZoneOffset(TimeZoneKey timeZoneKey)
-    {
-        requireNonNull(timeZoneKey, "timeZoneKey is null");
-        if (Objects.equals("UTC", timeZoneKey.getId())) {
-            return ZoneOffset.UTC;
-        }
-
-        checkArgument(timeZoneKey.getId().matches("[+-]\\d\\d:\\d\\d"), "Not a zone-offset timezone: %s", timeZoneKey);
-        return ZoneOffset.of(timeZoneKey.getId());
     }
 
     public static MaterializedResult materializeSourceDataStream(Session session, ConnectorPageSource pageSource, List<Type> types)

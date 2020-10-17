@@ -19,9 +19,9 @@ import com.google.common.collect.Maps;
 import io.prestosql.Session;
 import io.prestosql.cost.StatsProvider;
 import io.prestosql.metadata.Metadata;
-import io.prestosql.spi.block.SortOrder;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ConnectorTableHandle;
+import io.prestosql.spi.connector.SortOrder;
 import io.prestosql.spi.predicate.Domain;
 import io.prestosql.spi.predicate.TupleDomain;
 import io.prestosql.sql.parser.ParsingOptions;
@@ -81,10 +81,10 @@ import static com.google.common.base.MoreObjects.toStringHelper;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.ImmutableMap.toImmutableMap;
-import static io.prestosql.spi.block.SortOrder.ASC_NULLS_FIRST;
-import static io.prestosql.spi.block.SortOrder.ASC_NULLS_LAST;
-import static io.prestosql.spi.block.SortOrder.DESC_NULLS_FIRST;
-import static io.prestosql.spi.block.SortOrder.DESC_NULLS_LAST;
+import static io.prestosql.spi.connector.SortOrder.ASC_NULLS_FIRST;
+import static io.prestosql.spi.connector.SortOrder.ASC_NULLS_LAST;
+import static io.prestosql.spi.connector.SortOrder.DESC_NULLS_FIRST;
+import static io.prestosql.spi.connector.SortOrder.DESC_NULLS_LAST;
 import static io.prestosql.sql.ExpressionUtils.rewriteIdentifiersToSymbolReferences;
 import static io.prestosql.sql.planner.assertions.MatchResult.NO_MATCH;
 import static io.prestosql.sql.planner.assertions.MatchResult.match;
@@ -459,6 +459,31 @@ public final class PlanMatchPattern
             PlanMatchPattern left,
             PlanMatchPattern right)
     {
+        return join(joinType, expectedEquiCriteria, expectedFilter, Optional.empty(), expectedDistributionType, expectedSpillable, left, right);
+    }
+
+    public static PlanMatchPattern join(
+            Type joinType,
+            List<ExpectedValueProvider<EquiJoinClause>> expectedEquiCriteria,
+            Map<String, String> expectedDynamicFilter,
+            PlanMatchPattern left,
+            PlanMatchPattern right)
+    {
+        return join(joinType, expectedEquiCriteria, Optional.empty(), Optional.of(expectedDynamicFilter), Optional.empty(), Optional.empty(), left, right);
+    }
+
+    public static PlanMatchPattern join(
+            JoinNode.Type joinType,
+            List<ExpectedValueProvider<JoinNode.EquiJoinClause>> expectedEquiCriteria,
+            Optional<String> expectedFilter,
+            Optional<Map<String, String>> expectedDynamicFilter,
+            Optional<JoinNode.DistributionType> expectedDistributionType,
+            Optional<Boolean> expectedSpillable,
+            PlanMatchPattern left,
+            PlanMatchPattern right)
+    {
+        Optional<Map<SymbolAlias, SymbolAlias>> expectedDynamicFilterAliases = expectedDynamicFilter.map(dynamicFilter -> dynamicFilter.entrySet().stream()
+                .collect(toImmutableMap(entry -> new SymbolAlias(entry.getKey()), entry -> new SymbolAlias(entry.getValue()))));
         return node(JoinNode.class, left, right).with(
                 new JoinMatcher(
                         joinType,
@@ -466,32 +491,7 @@ public final class PlanMatchPattern
                         expectedFilter.map(predicate -> rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(predicate, new ParsingOptions()))),
                         expectedDistributionType,
                         expectedSpillable,
-                        Optional.empty()));
-    }
-
-    public static PlanMatchPattern join(
-            Type joinType,
-            List<ExpectedValueProvider<EquiJoinClause>> expectedEquiCriteria,
-            Map<String, String> expectedDynamicFilter,
-            Optional<String> expectedStaticFilter,
-            PlanMatchPattern leftSource,
-            PlanMatchPattern right)
-    {
-        Map<SymbolAlias, SymbolAlias> expectedDynamicFilterAliases = expectedDynamicFilter.entrySet().stream()
-                .collect(toImmutableMap(entry -> new SymbolAlias(entry.getKey()), entry -> new SymbolAlias(entry.getValue())));
-        DynamicFilterMatcher dynamicFilterMatcher = new DynamicFilterMatcher(
-                expectedDynamicFilterAliases,
-                expectedStaticFilter.map(predicate -> rewriteIdentifiersToSymbolReferences(new SqlParser().createExpression(predicate, new ParsingOptions()))));
-        JoinMatcher joinMatcher = new JoinMatcher(
-                joinType,
-                expectedEquiCriteria,
-                Optional.empty(),
-                Optional.empty(),
-                Optional.empty(),
-                Optional.of(dynamicFilterMatcher));
-
-        return node(JoinNode.class, anyTree(node(FilterNode.class, leftSource).with(dynamicFilterMatcher)), right)
-                .with(joinMatcher);
+                        expectedDynamicFilterAliases));
     }
 
     public static PlanMatchPattern spatialJoin(String expectedFilter, PlanMatchPattern left, PlanMatchPattern right)

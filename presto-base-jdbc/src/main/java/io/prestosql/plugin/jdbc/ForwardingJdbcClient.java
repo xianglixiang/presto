@@ -216,6 +216,12 @@ public abstract class ForwardingJdbcClient
     }
 
     @Override
+    public void setColumnComment(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column, Optional<String> comment)
+    {
+        delegate().setColumnComment(identity, handle, column, comment);
+    }
+
+    @Override
     public void addColumn(ConnectorSession session, JdbcTableHandle handle, ColumnMetadata column)
     {
         delegate().addColumn(session, handle, column);
@@ -273,5 +279,11 @@ public abstract class ForwardingJdbcClient
     public String quoted(RemoteTableName remoteTableName)
     {
         return delegate().quoted(remoteTableName);
+    }
+
+    @Override
+    public Map<String, Object> getTableProperties(JdbcIdentity identity, JdbcTableHandle tableHandle)
+    {
+        return delegate().getTableProperties(identity, tableHandle);
     }
 }

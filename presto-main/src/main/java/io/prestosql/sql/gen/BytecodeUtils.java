@@ -284,6 +284,9 @@ public final class BytecodeUtils
         // Index of parameter (without @IsNull) in Presto function
         int realParameterIndex = 0;
 
+        // Index of function argument types
+        int lambdaArgumentIndex = 0;
+
         MethodType methodType = binding.getType();
         Class<?> returnType = methodType.returnType();
         Class<?> unboxedReturnType = Primitives.unwrap(returnType);
@@ -331,8 +334,9 @@ public final class BytecodeUtils
                         currentParameterIndex++;
                         break;
                     case FUNCTION:
-                        Optional<Class<?>> lambdaInterface = functionInvoker.getLambdaInterfaces().get(realParameterIndex);
-                        block.append(argumentCompilers.get(realParameterIndex).apply(lambdaInterface));
+                        Class<?> lambdaInterface = functionInvoker.getLambdaInterfaces().get(lambdaArgumentIndex);
+                        block.append(argumentCompilers.get(realParameterIndex).apply(Optional.of(lambdaInterface)));
+                        lambdaArgumentIndex++;
                         break;
                     default:
                         throw new UnsupportedOperationException(format("Unsupported argument conventsion type: %s", invocationConvention.getArgumentConvention(realParameterIndex)));
@@ -420,12 +424,20 @@ public final class BytecodeUtils
     public static BytecodeExpression invoke(Binding binding, String name)
     {
         // ensure that name doesn't have a special characters
-        return invokeDynamic(BOOTSTRAP_METHOD, ImmutableList.of(binding.getBindingId()), name.replaceAll("[^(A-Za-z0-9_$)]", "_"), binding.getType());
+        return invokeDynamic(BOOTSTRAP_METHOD, ImmutableList.of(binding.getBindingId()), sanitizeName(name), binding.getType());
     }
 
     public static BytecodeExpression invoke(Binding binding, BoundSignature signature)
     {
         return invoke(binding, signature.getName());
+    }
+
+    /**
+     * Replace characters that are not safe to use in a JVM identifier.
+     */
+    public static String sanitizeName(String name)
+    {
+        return name.replaceAll("[^A-Za-z0-9_$]", "_");
     }
 
     public static BytecodeNode generateWrite(CallSiteBinder callSiteBinder, Scope scope, Variable wasNullVariable, Type type)

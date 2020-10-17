@@ -108,6 +108,7 @@ import io.prestosql.sql.tree.TimeLiteral;
 import io.prestosql.sql.tree.TimestampLiteral;
 import io.prestosql.sql.tree.TryExpression;
 import io.prestosql.sql.tree.WhenClause;
+import io.prestosql.sql.tree.Window;
 import io.prestosql.sql.tree.WindowFrame;
 import io.prestosql.type.FunctionType;
 import io.prestosql.type.TypeCoercion;
@@ -123,12 +124,14 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 
+import static com.google.common.base.MoreObjects.firstNonNull;
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Preconditions.checkState;
 import static com.google.common.base.Verify.verify;
 import static com.google.common.collect.ImmutableList.toImmutableList;
 import static com.google.common.collect.Iterables.getOnlyElement;
 import static io.prestosql.spi.StandardErrorCode.EXPRESSION_NOT_CONSTANT;
+import static io.prestosql.spi.StandardErrorCode.FUNCTION_NOT_AGGREGATE;
 import static io.prestosql.spi.StandardErrorCode.INVALID_FUNCTION_ARGUMENT;
 import static io.prestosql.spi.StandardErrorCode.INVALID_LITERAL;
 import static io.prestosql.spi.StandardErrorCode.INVALID_PARAMETER_USAGE;
@@ -152,12 +155,10 @@ import static io.prestosql.spi.type.TimeWithTimeZoneType.TIME_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TimeWithTimeZoneType.createTimeWithTimeZoneType;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.prestosql.spi.type.TimestampType.createTimestampType;
-import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
 import static io.prestosql.spi.type.TimestampWithTimeZoneType.createTimestampWithTimeZoneType;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
-import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static io.prestosql.sql.NodeUtils.getSortItemsFromOrderBy;
 import static io.prestosql.sql.analyzer.Analyzer.verifyNoAggregateWindowOrGroupingFunctions;
 import static io.prestosql.sql.analyzer.ExpressionTreeUtils.extractLocation;
@@ -403,12 +404,7 @@ public class ExpressionAnalyzer
                     }
                     break;
                 case TIMESTAMP:
-                    if (node.getPrecision() != null) {
-                        type = createTimestampWithTimeZoneType(node.getPrecision());
-                    }
-                    else {
-                        type = TIMESTAMP_WITH_TIME_ZONE;
-                    }
+                    type = createTimestampWithTimeZoneType(firstNonNull(node.getPrecision(), TimestampWithTimeZoneType.DEFAULT_PRECISION));
                     break;
                 case LOCALTIMESTAMP:
                     if (node.getPrecision() != null) {
@@ -536,7 +532,26 @@ public class ExpressionAnalyzer
         @Override
         protected Type visitComparisonExpression(ComparisonExpression node, StackableAstVisitorContext<Context> context)
         {
-            OperatorType operatorType = OperatorType.valueOf(node.getOperator().name());
+            OperatorType operatorType;
+            switch (node.getOperator()) {
+                case EQUAL:
+                case NOT_EQUAL:
+                    operatorType = OperatorType.EQUAL;
+                    break;
+                case LESS_THAN:
+                case GREATER_THAN:
+                    operatorType = OperatorType.LESS_THAN;
+                    break;
+                case LESS_THAN_OR_EQUAL:
+                case GREATER_THAN_OR_EQUAL:
+                    operatorType = OperatorType.LESS_THAN_OR_EQUAL;
+                    break;
+                case IS_DISTINCT_FROM:
+                    operatorType = OperatorType.IS_DISTINCT_FROM;
+                    break;
+                default:
+                    throw new UnsupportedOperationException("Unsupported comparison operator: " + node.getOperator());
+            }
             return getOperator(context, node, operatorType, node.getLeft(), node.getRight());
         }
 
@@ -913,7 +928,8 @@ public class ExpressionAnalyzer
         protected Type visitFunctionCall(FunctionCall node, StackableAstVisitorContext<Context> context)
         {
             if (node.getWindow().isPresent()) {
-                for (Expression expression : node.getWindow().get().getPartitionBy()) {
+                Window window = node.getWindow().get();
+                for (Expression expression : window.getPartitionBy()) {
                     process(expression, context);
                     Type type = getExpressionType(expression);
                     if (!type.isComparable()) {
@@ -921,7 +937,7 @@ public class ExpressionAnalyzer
                     }
                 }
 
-                for (SortItem sortItem : getSortItemsFromOrderBy(node.getWindow().get().getOrderBy())) {
+                for (SortItem sortItem : getSortItemsFromOrderBy(window.getOrderBy())) {
                     process(sortItem.getSortKey(), context);
                     Type type = getExpressionType(sortItem.getSortKey());
                     if (!type.isOrderable()) {
@@ -929,18 +945,20 @@ public class ExpressionAnalyzer
                     }
                 }
 
-                if (node.getWindow().get().getFrame().isPresent()) {
-                    WindowFrame frame = node.getWindow().get().getFrame().get();
+                if (window.getFrame().isPresent()) {
+                    WindowFrame frame = window.getFrame().get();
 
                     if (frame.getStart().getValue().isPresent()) {
-                        Type type = process(frame.getStart().getValue().get(), context);
+                        Expression startValue = frame.getStart().getValue().get();
+                        Type type = process(startValue, context);
                         if (!type.equals(INTEGER) && !type.equals(BIGINT)) {
                             throw semanticException(TYPE_MISMATCH, node, "Window frame start value type must be INTEGER or BIGINT(actual %s)", type);
                         }
                     }
 
                     if (frame.getEnd().isPresent() && frame.getEnd().get().getValue().isPresent()) {
-                        Type type = process(frame.getEnd().get().getValue().get(), context);
+                        Expression endValue = frame.getEnd().get().getValue().get();
+                        Type type = process(endValue, context);
                         if (!type.equals(INTEGER) && !type.equals(BIGINT)) {
                             throw semanticException(TYPE_MISMATCH, node, "Window frame end value type must be INTEGER or BIGINT (actual %s)", type);
                         }
@@ -948,6 +966,11 @@ public class ExpressionAnalyzer
                 }
 
                 windowFunctions.add(NodeRef.of(node));
+            }
+            else {
+                if (node.isDistinct() && !metadata.isAggregationFunction(node.getName())) {
+                    throw semanticException(FUNCTION_NOT_AGGREGATE, node, "DISTINCT is not supported for non-aggregation functions");
+                }
             }
 
             if (node.getFilter().isPresent()) {
@@ -1098,7 +1121,7 @@ public class ExpressionAnalyzer
                     .map(expression -> process(expression, context))
                     .collect(toImmutableList());
 
-            if (!isVarcharType(arguments.get(0))) {
+            if (!(arguments.get(0) instanceof VarcharType)) {
                 throw semanticException(TYPE_MISMATCH, node.getArguments().get(0), "Type of first argument to format() must be VARCHAR (actual: %s)", arguments.get(0));
             }
 
@@ -1158,7 +1181,7 @@ public class ExpressionAnalyzer
         {
             return type.equals(DATE) ||
                     type instanceof TimeType ||
-                    type.equals(TIME_WITH_TIME_ZONE) ||
+                    type instanceof TimeWithTimeZoneType ||
                     type instanceof TimestampType ||
                     type instanceof TimestampWithTimeZoneType ||
                     type.equals(INTERVAL_DAY_TIME) ||
@@ -1179,10 +1202,7 @@ public class ExpressionAnalyzer
                 semanticException(TYPE_MISMATCH, node, "Cannot check if %s is BETWEEN %s and %s", valueType, minType, maxType);
             }
 
-            try {
-                metadata.resolveOperator(OperatorType.LESS_THAN_OR_EQUAL, List.of(commonType.get(), commonType.get()));
-            }
-            catch (OperatorNotFoundException e) {
+            if (!commonType.get().isOrderable()) {
                 semanticException(TYPE_MISMATCH, node, "Cannot check if %s is BETWEEN %s and %s", valueType, minType, maxType);
             }
 
@@ -1481,7 +1501,7 @@ public class ExpressionAnalyzer
                 operatorSignature = metadata.resolveOperator(operatorType, argumentTypes.build()).getSignature();
             }
             catch (OperatorNotFoundException e) {
-                throw semanticException(TYPE_MISMATCH, node, "%s", e.getMessage());
+                throw semanticException(TYPE_MISMATCH, node, e, "%s", e.getMessage());
             }
 
             for (int i = 0; i < arguments.length; i++) {

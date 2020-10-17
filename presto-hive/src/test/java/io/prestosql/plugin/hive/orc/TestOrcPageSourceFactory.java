@@ -80,14 +80,12 @@ public class TestOrcPageSourceFactory
 
     @Test
     public void testFullFileRead()
-            throws Exception
     {
         assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), Optional.empty(), nationKey -> false);
     }
 
     @Test
     public void testSingleColumnRead()
-            throws Exception
     {
         assertRead(ImmutableSet.of(REGION_KEY), OptionalLong.empty(), Optional.empty(), nationKey -> false);
     }
@@ -97,7 +95,6 @@ public class TestOrcPageSourceFactory
      */
     @Test
     public void testFullFileSkipped()
-            throws Exception
     {
         assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(100L), Optional.empty(), nationKey -> false);
     }
@@ -107,19 +104,17 @@ public class TestOrcPageSourceFactory
      */
     @Test
     public void testSomeStripesAndRowGroupRead()
-            throws Exception
     {
         assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.of(5L), Optional.empty(), nationKey -> false);
     }
 
     @Test
     public void testDeletedRows()
-            throws Exception
     {
         Path partitionLocation = new Path(getClass().getClassLoader().getResource("nation_delete_deltas") + "/");
         Optional<AcidInfo> acidInfo = AcidInfo.builder(partitionLocation)
-                .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(3L, 3L, 0)), 3L, 3L, 0)
-                .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(4L, 4L, 0)), 4L, 4L, 0)
+                .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(3L, 3L, 0)))
+                .addDeleteDelta(new Path(partitionLocation, deleteDeltaSubdir(4L, 4L, 0)))
                 .build();
 
         assertRead(ImmutableSet.copyOf(NationColumn.values()), OptionalLong.empty(), acidInfo, nationKey -> nationKey == 5 || nationKey == 19);
@@ -132,7 +127,7 @@ public class TestOrcPageSourceFactory
         String tablePath = tableFile.getParent();
 
         AcidInfo acidInfo = AcidInfo.builder(new Path(tablePath))
-                .addDeleteDelta(new Path(tablePath, deleteDeltaSubdir(10000001, 10000001, 0)), 10000001, 10000001, 0)
+                .addDeleteDelta(new Path(tablePath, deleteDeltaSubdir(10000001, 10000001, 0)))
                 .addOriginalFile(new Path(tablePath, "000000_0"), 1780, 0)
                 .buildWithRequiredOriginalFiles(0);
 

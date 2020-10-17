@@ -23,9 +23,11 @@ import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
 import io.airlift.units.MinDataSize;
+import io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior;
 import org.joda.time.DateTimeZone;
 
 import javax.annotation.Nullable;
+import javax.validation.constraints.AssertTrue;
 import javax.validation.constraints.Max;
 import javax.validation.constraints.Min;
 import javax.validation.constraints.NotNull;
@@ -35,6 +37,8 @@ import java.util.Optional;
 import java.util.TimeZone;
 
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
+import static io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior.APPEND;
+import static io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior.ERROR;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 @DefunctConfig({
@@ -80,6 +84,7 @@ public class HiveConfig
     private HiveCompressionCodec hiveCompressionCodec = HiveCompressionCodec.GZIP;
     private boolean respectTableFormat = true;
     private boolean immutablePartitions;
+    private Optional<InsertExistingPartitionsBehavior> insertExistingPartitionsBehavior = Optional.empty();
     private boolean createEmptyBucketFiles;
     private int maxPartitionsPerWriter = 100;
     private int maxOpenSortFiles = 50;
@@ -110,9 +115,6 @@ public class HiveConfig
     private boolean ignoreCorruptedStatistics;
     private boolean collectColumnStatisticsOnWrite = true;
 
-    private String recordingPath;
-    private boolean replay;
-    private Duration recordingDuration = new Duration(10, MINUTES);
     private boolean s3SelectPushdownEnabled;
     private int s3SelectPushdownMaxConnections = 500;
 
@@ -132,6 +134,10 @@ public class HiveConfig
     private boolean partitionUseColumnNames;
 
     private boolean projectionPushdownEnabled = true;
+
+    private Duration dynamicFilteringProbeBlockingTimeout = new Duration(0, MINUTES);
+
+    private HiveTimestampPrecision timestampPrecision = HiveTimestampPrecision.MILLISECONDS;
 
     public int getMaxInitialSplits()
     {
@@ -448,6 +454,27 @@ public class HiveConfig
     {
         this.immutablePartitions = immutablePartitions;
         return this;
+    }
+
+    public InsertExistingPartitionsBehavior getInsertExistingPartitionsBehavior()
+    {
+        return insertExistingPartitionsBehavior.orElse(immutablePartitions ? ERROR : APPEND);
+    }
+
+    @Config("hive.insert-existing-partitions-behavior")
+    @ConfigDescription("Default value for insert existing partitions behavior")
+    public HiveConfig setInsertExistingPartitionsBehavior(InsertExistingPartitionsBehavior insertExistingPartitionsBehavior)
+    {
+        this.insertExistingPartitionsBehavior = Optional.ofNullable(insertExistingPartitionsBehavior);
+        return this;
+    }
+
+    @AssertTrue(message = "insert-existing-partitions-behavior cannot be APPEND when immutable-partitions is true")
+    public boolean isInsertExistingPartitionsBehaviorValid()
+    {
+        return insertExistingPartitionsBehavior
+                .map(v -> InsertExistingPartitionsBehavior.isValid(v, immutablePartitions))
+                .orElse(true);
     }
 
     public boolean isCreateEmptyBucketFiles()
@@ -797,43 +824,6 @@ public class HiveConfig
         return this;
     }
 
-    @Config("hive.metastore-recording-path")
-    public HiveConfig setRecordingPath(String recordingPath)
-    {
-        this.recordingPath = recordingPath;
-        return this;
-    }
-
-    public String getRecordingPath()
-    {
-        return recordingPath;
-    }
-
-    @Config("hive.replay-metastore-recording")
-    public HiveConfig setReplay(boolean replay)
-    {
-        this.replay = replay;
-        return this;
-    }
-
-    public boolean isReplay()
-    {
-        return replay;
-    }
-
-    @Config("hive.metastore-recording-duration")
-    public HiveConfig setRecordingDuration(Duration recordingDuration)
-    {
-        this.recordingDuration = recordingDuration;
-        return this;
-    }
-
-    @NotNull
-    public Duration getRecordingDuration()
-    {
-        return recordingDuration;
-    }
-
     public boolean isS3SelectPushdownEnabled()
     {
         return s3SelectPushdownEnabled;
@@ -962,6 +952,33 @@ public class HiveConfig
     public HiveConfig setProjectionPushdownEnabled(boolean projectionPushdownEnabled)
     {
         this.projectionPushdownEnabled = projectionPushdownEnabled;
+        return this;
+    }
+
+    @NotNull
+    public Duration getDynamicFilteringProbeBlockingTimeout()
+    {
+        return dynamicFilteringProbeBlockingTimeout;
+    }
+
+    @Config("hive.dynamic-filtering-probe-blocking-timeout")
+    @ConfigDescription("Duration to wait for completion of dynamic filters during split generation for probe side table")
+    public HiveConfig setDynamicFilteringProbeBlockingTimeout(Duration dynamicFilteringProbeBlockingTimeout)
+    {
+        this.dynamicFilteringProbeBlockingTimeout = dynamicFilteringProbeBlockingTimeout;
+        return this;
+    }
+
+    public HiveTimestampPrecision getTimestampPrecision()
+    {
+        return timestampPrecision;
+    }
+
+    @Config("hive.timestamp-precision")
+    @ConfigDescription("Precision used to represent timestamps")
+    public HiveConfig setTimestampPrecision(HiveTimestampPrecision timestampPrecision)
+    {
+        this.timestampPrecision = timestampPrecision;
         return this;
     }
 }

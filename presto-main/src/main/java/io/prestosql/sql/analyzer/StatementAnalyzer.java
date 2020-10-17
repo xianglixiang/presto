@@ -14,7 +14,6 @@
 package io.prestosql.sql.analyzer;
 
 import com.google.common.base.Joiner;
-import com.google.common.base.Preconditions;
 import com.google.common.base.VerifyException;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
@@ -56,6 +55,7 @@ import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeNotFoundException;
 import io.prestosql.spi.type.VarcharType;
+import io.prestosql.sql.InterpretedFunctionInvoker;
 import io.prestosql.sql.SqlPath;
 import io.prestosql.sql.analyzer.Analysis.GroupingSetAnalysis;
 import io.prestosql.sql.analyzer.Analysis.SelectExpression;
@@ -223,6 +223,7 @@ import static io.prestosql.spi.StandardErrorCode.VIEW_IS_STALE;
 import static io.prestosql.spi.connector.StandardWarningCode.REDUNDANT_ORDER_BY;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
+import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
 import static io.prestosql.sql.NodeUtils.getSortItemsFromOrderBy;
 import static io.prestosql.sql.NodeUtils.mapFromProperties;
@@ -502,7 +503,7 @@ class StatementAnalyzer
             accessControl.checkCanInsertIntoTable(session.toSecurityContext(), targetTable);
 
             Map<String, ColumnHandle> columnHandles = metadata.getColumnHandles(session, targetTableHandle.get());
-            Preconditions.checkState(materializedViewHandle.isPresent());
+            checkState(materializedViewHandle.isPresent());
             analysis.setRefreshMaterializedView(new Analysis.RefreshMaterializedViewAnalysis(
                     materializedViewHandle.get(),
                     targetTableHandle.get(), query,
@@ -1410,13 +1411,13 @@ class StatementAnalyzer
             // are implicitly coercible to the declared materialized view types.
             List<Field> outputFields = viewColumns.stream()
                     .map(column -> Field.newQualified(
-                    table.getName(),
-                    Optional.of(column.getName()),
-                    getViewColumnType(column, name, table),
-                    false,
-                    Optional.of(name),
-                    Optional.of(column.getName()),
-                    false))
+                            table.getName(),
+                            Optional.of(column.getName()),
+                            getViewColumnType(column, name, table),
+                            false,
+                            Optional.of(name),
+                            Optional.of(column.getName()),
+                            false))
                     .collect(toImmutableList());
 
             analysis.addRelationCoercion(table, outputFields.stream().map(Field::getType).toArray(Type[]::new));
@@ -1455,8 +1456,9 @@ class StatementAnalyzer
         @Override
         protected Scope visitSampledRelation(SampledRelation relation, Optional<Scope> scope)
         {
-            if (!SymbolsExtractor.extractNames(relation.getSamplePercentage(), analysis.getColumnReferences()).isEmpty()) {
-                throw semanticException(EXPRESSION_NOT_CONSTANT, relation.getSamplePercentage(), "Sample percentage cannot contain column references");
+            Expression samplePercentage = relation.getSamplePercentage();
+            if (!SymbolsExtractor.extractNames(samplePercentage, analysis.getColumnReferences()).isEmpty()) {
+                throw semanticException(EXPRESSION_NOT_CONSTANT, samplePercentage, "Sample percentage cannot contain column references");
             }
 
             Map<NodeRef<Expression>, Type> expressionTypes = ExpressionAnalyzer.analyzeExpressions(
@@ -1465,29 +1467,41 @@ class StatementAnalyzer
                     accessControl,
                     sqlParser,
                     TypeProvider.empty(),
-                    ImmutableList.of(relation.getSamplePercentage()),
+                    ImmutableList.of(samplePercentage),
                     analysis.getParameters(),
                     WarningCollector.NOOP,
                     analysis.isDescribe())
                     .getExpressionTypes();
 
-            ExpressionInterpreter samplePercentageEval = expressionOptimizer(relation.getSamplePercentage(), metadata, session, expressionTypes);
+            Type samplePercentageType = expressionTypes.get(NodeRef.of(samplePercentage));
+            if (!typeCoercion.canCoerce(samplePercentageType, DOUBLE)) {
+                throw semanticException(TYPE_MISMATCH, samplePercentage, "Sample percentage should be a numeric expression");
+            }
+
+            ExpressionInterpreter samplePercentageEval = expressionOptimizer(samplePercentage, metadata, session, expressionTypes);
 
             Object samplePercentageObject = samplePercentageEval.optimize(symbol -> {
-                throw semanticException(EXPRESSION_NOT_CONSTANT, relation.getSamplePercentage(), "Sample percentage cannot contain column references");
+                throw semanticException(EXPRESSION_NOT_CONSTANT, samplePercentage, "Sample percentage cannot contain column references");
             });
 
-            if (!(samplePercentageObject instanceof Number)) {
-                throw semanticException(TYPE_MISMATCH, relation.getSamplePercentage(), "Sample percentage should evaluate to a numeric expression");
+            if (samplePercentageObject == null) {
+                throw semanticException(INVALID_ARGUMENTS, samplePercentage, "Sample percentage cannot be NULL");
             }
 
-            double samplePercentageValue = ((Number) samplePercentageObject).doubleValue();
+            if (samplePercentageType != DOUBLE) {
+                ResolvedFunction coercion = metadata.getCoercion(samplePercentageType, DOUBLE);
+                InterpretedFunctionInvoker functionInvoker = new InterpretedFunctionInvoker(metadata);
+                samplePercentageObject = functionInvoker.invoke(coercion, session.toConnectorSession(), samplePercentageObject);
+                verify(samplePercentageObject != null, "Coercion from %s to %s returned null", samplePercentageType, DOUBLE);
+            }
+
+            double samplePercentageValue = (double) samplePercentageObject;
 
             if (samplePercentageValue < 0.0) {
-                throw semanticException(NUMERIC_VALUE_OUT_OF_RANGE, relation.getSamplePercentage(), "Sample percentage must be greater than or equal to 0");
+                throw semanticException(NUMERIC_VALUE_OUT_OF_RANGE, samplePercentage, "Sample percentage must be greater than or equal to 0");
             }
             if ((samplePercentageValue > 100.0)) {
-                throw semanticException(NUMERIC_VALUE_OUT_OF_RANGE, relation.getSamplePercentage(), "Sample percentage must be less than or equal to 100");
+                throw semanticException(NUMERIC_VALUE_OUT_OF_RANGE, samplePercentage, "Sample percentage must be less than or equal to 100");
             }
 
             analysis.setSampleRatio(relation, samplePercentageValue / 100);
@@ -1773,7 +1787,7 @@ class StatementAnalyzer
                             leftField.get().getType(), rightField.get().getType()));
                 }
                 catch (OperatorNotFoundException e) {
-                    throw semanticException(TYPE_MISMATCH, column, "%s", e.getMessage());
+                    throw semanticException(TYPE_MISMATCH, column, e, "%s", e.getMessage());
                 }
 
                 Optional<Type> type = typeCoercion.getCommonSuperType(leftField.get().getType(), rightField.get().getType());

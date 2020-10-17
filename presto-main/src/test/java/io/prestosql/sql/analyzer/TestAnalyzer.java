@@ -20,6 +20,7 @@ import io.prestosql.SystemSessionProperties;
 import io.prestosql.connector.CatalogName;
 import io.prestosql.connector.informationschema.InformationSchemaConnector;
 import io.prestosql.connector.system.SystemConnector;
+import io.prestosql.execution.DynamicFilterConfig;
 import io.prestosql.execution.QueryManagerConfig;
 import io.prestosql.execution.TaskManagerConfig;
 import io.prestosql.execution.warnings.WarningCollector;
@@ -209,6 +210,15 @@ public class TestAnalyzer
                 .hasErrorCode(TYPE_MISMATCH);
         assertFails("SELECT DISTINCT ROW(1, approx_set(1)).* from t1")
                 .hasErrorCode(TYPE_MISMATCH);
+    }
+
+    @Test
+    public void testNonAggregationDistinct()
+    {
+        assertFails("SELECT lower(DISTINCT a) FROM (VALUES('foo')) AS t1(a)")
+                .hasErrorCode(FUNCTION_NOT_AGGREGATE);
+        assertFails("SELECT lower(DISTINCT max(a)) FROM (VALUES('foo')) AS t1(a)")
+                .hasErrorCode(FUNCTION_NOT_AGGREGATE);
     }
 
     @Test
@@ -763,7 +773,8 @@ public class TestAnalyzer
                 new TaskManagerConfig(),
                 new MemoryManagerConfig(),
                 new FeaturesConfig().setMaxGroupingSets(2048),
-                new NodeMemoryConfig()))).build();
+                new NodeMemoryConfig(),
+                new DynamicFilterConfig()))).build();
         analyze(session, "SELECT a, b, c, d, e, f, g, h, i, j, k, SUM(l)" +
                 "FROM (VALUES (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12))\n" +
                 "t (a, b, c, d, e, f, g, h, i, j, k, l)\n" +

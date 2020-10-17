@@ -18,6 +18,7 @@ import com.google.inject.Key;
 import com.google.inject.Module;
 import com.google.inject.Scopes;
 import com.google.inject.multibindings.Multibinder;
+import io.prestosql.plugin.base.CatalogName;
 import io.prestosql.spi.connector.ConnectorAccessControl;
 import io.prestosql.spi.connector.ConnectorPageSinkProvider;
 import io.prestosql.spi.connector.ConnectorRecordSetProvider;
@@ -44,11 +45,13 @@ public class JdbcModule
     @Override
     public void configure(Binder binder)
     {
-        binder.install(new JdbcDiagnosticModule(catalogName));
+        binder.bind(CatalogName.class).toInstance(new CatalogName(catalogName));
+        binder.install(new JdbcDiagnosticModule());
 
         newOptionalBinder(binder, ConnectorAccessControl.class);
 
         procedureBinder(binder);
+        tablePropertiesProviderBinder(binder);
 
         binder.bind(JdbcMetadataFactory.class).in(Scopes.SINGLETON);
         newOptionalBinder(binder, ConnectorSplitManager.class).setDefault().to(JdbcSplitManager.class).in(Scopes.SINGLETON);
@@ -84,5 +87,15 @@ public class JdbcModule
     public static void bindProcedure(Binder binder, Class<? extends Provider<? extends Procedure>> type)
     {
         procedureBinder(binder).addBinding().toProvider(type).in(Scopes.SINGLETON);
+    }
+
+    public static Multibinder<TablePropertiesProvider> tablePropertiesProviderBinder(Binder binder)
+    {
+        return newSetBinder(binder, TablePropertiesProvider.class);
+    }
+
+    public static void bindTablePropertiesProvider(Binder binder, Class<? extends TablePropertiesProvider> type)
+    {
+        tablePropertiesProviderBinder(binder).addBinding().to(type).in(Scopes.SINGLETON);
     }
 }

@@ -91,6 +91,21 @@ Date and Time Functions
         SELECT from_iso8601_timestamp('2020-05-11T11:15:05.055+01:00');
         -- 2020-05-11 11:15:05.055 +01:00
 
+.. function:: from_iso8601_timestamp_nanos(string) -> timestamp(9) with time zone
+
+    Parses the ISO 8601 formatted date ``string``, optionally with time and time
+    zone, into a ``timestamp(9) with time zone``. The time defaults to
+    ``00:00:00.000000000``, and the time zone defaults to the session time zone::
+
+        SELECT from_iso8601_timestamp('2020-05-11');
+        -- 2020-05-11 00:00:00.000000000 America/Vancouver
+
+        SELECT from_iso8601_timestamp('2020-05-11T11:15:05');
+        -- 2020-05-11 11:15:05.000000000 America/Vancouver
+
+        SELECT from_iso8601_timestamp('2020-05-11T11:15:05.123456789+01:00');
+        -- 2020-05-11 11:15:05.123456789 +01:00
+
 .. function:: from_iso8601_date(string) -> date
 
     Parses the ISO 8601 formatted date ``string`` into a ``date``. The date can
@@ -134,6 +149,11 @@ Date and Time Functions
     Returns the UNIX timestamp ``unixtime`` as a timestamp with time zone
     using ``hours`` and ``minutes`` for the time zone offset. ``unixtime`` is
     the number of seconds since ``1970-01-01 00:00:00`` in ``double`` data type.
+
+.. function:: from_unixtime_nanos(unixtime) -> timestamp(9)
+
+    Returns the UNIX timestamp ``unixtime`` as a timestamp. ``unixtime`` is the
+    number of nanoseconds since ``1970-01-01 00:00:00.000000000 UTC``.
 
 .. data:: localtime
 

@@ -52,6 +52,7 @@ import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.VarbinaryType;
 import io.prestosql.spi.type.VarcharType;
 import org.apache.hadoop.conf.Configuration;
+import org.apache.hadoop.fs.FileStatus;
 import org.apache.hadoop.fs.FileSystem;
 import org.apache.hadoop.fs.FilterFileSystem;
 import org.apache.hadoop.fs.Path;
@@ -111,7 +112,6 @@ import static io.prestosql.plugin.hive.util.HiveUtil.isArrayType;
 import static io.prestosql.plugin.hive.util.HiveUtil.isMapType;
 import static io.prestosql.plugin.hive.util.HiveUtil.isRowType;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
-import static io.prestosql.spi.type.Chars.isCharType;
 import static io.prestosql.spi.type.Chars.padSpaces;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.prestosql.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
@@ -539,7 +539,37 @@ public final class HiveWriteUtils
 
         createDirectory(context, hdfsEnvironment, temporaryPath);
 
+        if (hdfsEnvironment.isNewFileInheritOwnership()) {
+            setDirectoryOwner(context, hdfsEnvironment, temporaryPath, targetPath);
+        }
+
         return temporaryPath;
+    }
+
+    private static void setDirectoryOwner(HdfsContext context, HdfsEnvironment hdfsEnvironment, Path path, Path targetPath)
+    {
+        try {
+            FileSystem fileSystem = hdfsEnvironment.getFileSystem(context, path);
+            FileStatus fileStatus;
+            if (!fileSystem.exists(targetPath)) {
+                // For new table
+                Path parent = targetPath.getParent();
+                if (!fileSystem.exists(parent)) {
+                    return;
+                }
+                fileStatus = fileSystem.getFileStatus(parent);
+            }
+            else {
+                // For existing table
+                fileStatus = fileSystem.getFileStatus(targetPath);
+            }
+            String owner = fileStatus.getOwner();
+            String group = fileStatus.getGroup();
+            fileSystem.setOwner(path, owner, group);
+        }
+        catch (IOException e) {
+            throw new PrestoException(HIVE_FILESYSTEM_ERROR, format("Failed to set owner on %s based on %s", path, targetPath), e);
+        }
     }
 
     public static void createDirectory(HdfsContext context, HdfsEnvironment hdfsEnvironment, Path path)
@@ -658,7 +688,7 @@ public final class HiveWriteUtils
             }
         }
 
-        if (isCharType(type)) {
+        if (type instanceof CharType) {
             CharType charType = (CharType) type;
             int charLength = charType.getLength();
             return getPrimitiveWritableObjectInspector(getCharTypeInfo(charLength));

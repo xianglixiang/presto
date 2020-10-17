@@ -72,7 +72,7 @@ public final class DockerFiles
 
     public String getDockerFilesHostPath(String file)
     {
-        checkArgument(file != null && !file.isEmpty() && !file.startsWith("/"), "Invalid file: %s", file);
+        checkArgument(file != null && !file.isEmpty() && !(file.charAt(0) == '/'), "Invalid file: %s", file);
         Path filePath = Paths.get(getDockerFilesHostPath()).resolve(file);
         checkArgument(Files.exists(filePath), "'%s' resolves to '%s', but it does not exist", file, filePath);
         return filePath.toString();
@@ -109,10 +109,15 @@ public final class DockerFiles
     }
 
     public static Path createTemporaryDirectoryForDocker()
-            throws IOException
     {
-        // Cannot use Files.createTempDirectory() because on Mac by default it uses /var/folders/ which is not visible to Docker for Mac
-        Path temporaryDirectoryForDocker = Files.createDirectory(Paths.get("/tmp/docker-files-" + randomUUID().toString()));
+        Path temporaryDirectoryForDocker;
+        try {
+            // Cannot use Files.createTempDirectory() because on Mac by default it uses /var/folders/ which is not visible to Docker for Mac
+            temporaryDirectoryForDocker = Files.createDirectory(Paths.get("/tmp/docker-files-" + randomUUID().toString()));
+        }
+        catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
 
         // Best-effort cleanup
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {

@@ -16,6 +16,7 @@ package io.prestosql.plugin.postgresql;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.ImmutableSet;
+import com.google.common.math.LongMath;
 import io.airlift.log.Logger;
 import io.airlift.slice.Slice;
 import io.prestosql.plugin.jdbc.BaseJdbcClient;
@@ -60,8 +61,13 @@ import io.prestosql.spi.connector.TableNotFoundException;
 import io.prestosql.spi.type.ArrayType;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.Decimals;
+import io.prestosql.spi.type.LongTimestamp;
+import io.prestosql.spi.type.LongTimestampWithTimeZone;
 import io.prestosql.spi.type.MapType;
 import io.prestosql.spi.type.StandardTypes;
+import io.prestosql.spi.type.TimeType;
+import io.prestosql.spi.type.TimestampType;
+import io.prestosql.spi.type.TimestampWithTimeZoneType;
 import io.prestosql.spi.type.TinyintType;
 import io.prestosql.spi.type.Type;
 import io.prestosql.spi.type.TypeManager;
@@ -81,7 +87,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.sql.Types;
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -106,8 +116,6 @@ import static io.prestosql.plugin.jdbc.DecimalSessionSessionProperties.getDecima
 import static io.prestosql.plugin.jdbc.JdbcErrorCode.JDBC_ERROR;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.decimalColumnMapping;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.fromPrestoTimestamp;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timeColumnMappingWithTruncation;
-import static io.prestosql.plugin.jdbc.StandardColumnMappings.timeWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.timestampReadFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.tinyintWriteFunction;
 import static io.prestosql.plugin.jdbc.StandardColumnMappings.varbinaryWriteFunction;
@@ -128,10 +136,17 @@ import static io.prestosql.spi.type.DateTimeEncoding.packDateTimeWithZone;
 import static io.prestosql.spi.type.DateTimeEncoding.unpackMillisUtc;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
 import static io.prestosql.spi.type.StandardTypes.JSON;
-import static io.prestosql.spi.type.TimeType.TIME;
+import static io.prestosql.spi.type.TimeType.createTimeType;
 import static io.prestosql.spi.type.TimeZoneKey.UTC_KEY;
-import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
-import static io.prestosql.spi.type.TimestampWithTimeZoneType.TIMESTAMP_WITH_TIME_ZONE;
+import static io.prestosql.spi.type.TimestampType.createTimestampType;
+import static io.prestosql.spi.type.TimestampWithTimeZoneType.createTimestampWithTimeZoneType;
+import static io.prestosql.spi.type.Timestamps.MILLISECONDS_PER_SECOND;
+import static io.prestosql.spi.type.Timestamps.NANOSECONDS_PER_DAY;
+import static io.prestosql.spi.type.Timestamps.NANOSECONDS_PER_MILLISECOND;
+import static io.prestosql.spi.type.Timestamps.PICOSECONDS_PER_DAY;
+import static io.prestosql.spi.type.Timestamps.PICOSECONDS_PER_MICROSECOND;
+import static io.prestosql.spi.type.Timestamps.PICOSECONDS_PER_NANOSECOND;
+import static io.prestosql.spi.type.Timestamps.round;
 import static io.prestosql.spi.type.TypeSignature.mapType;
 import static io.prestosql.spi.type.VarbinaryType.VARBINARY;
 import static io.prestosql.spi.type.VarcharType.VARCHAR;
@@ -150,6 +165,7 @@ public class PostgreSqlClient
      */
     private static final int ARRAY_RESULT_SET_VALUE_COLUMN = 2;
     private static final String DUPLICATE_TABLE_SQLSTATE = "42P07";
+    private static final int POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION = 6;
 
     private final Type jsonType;
     private final Type uuidType;
@@ -176,7 +192,7 @@ public class PostgreSqlClient
         }
         this.tableTypes = tableTypes.toArray(new String[0]);
 
-        JdbcTypeHandle bigintTypeHandle = new JdbcTypeHandle(Types.BIGINT, Optional.of("bigint"), 0, 0, Optional.empty(), Optional.empty());
+        JdbcTypeHandle bigintTypeHandle = new JdbcTypeHandle(Types.BIGINT, Optional.of("bigint"), 0, Optional.empty(), Optional.empty(), Optional.empty());
         this.aggregateFunctionRewriter = new AggregateFunctionRewriter(
                 this::quoted,
                 ImmutableSet.<AggregateFunctionRule>builder()
@@ -254,7 +270,7 @@ public class PostgreSqlClient
                             resultSet.getInt("DATA_TYPE"),
                             Optional.of(resultSet.getString("TYPE_NAME")),
                             resultSet.getInt("COLUMN_SIZE"),
-                            resultSet.getInt("DECIMAL_DIGITS"),
+                            getInteger(resultSet, "DECIMAL_DIGITS"),
                             Optional.ofNullable(arrayColumnDimensions.get(columnName)),
                             Optional.empty());
                     Optional<ColumnMapping> columnMapping = toPrestoType(session, connection, typeHandle);
@@ -338,7 +354,8 @@ public class PostgreSqlClient
                 return Optional.of(jsonColumnMapping());
             case "timestamptz":
                 // PostgreSQL's "timestamp with time zone" is reported as Types.TIMESTAMP rather than Types.TIMESTAMP_WITH_TIMEZONE
-                return Optional.of(timestampWithTimeZoneColumnMapping());
+                int decimalDigits = typeHandle.getDecimalDigits().orElseThrow(() -> new IllegalStateException("decimal digits not present"));
+                return Optional.of(timestampWithTimeZoneColumnMapping(decimalDigits));
             case "hstore":
                 return Optional.of(hstoreColumnMapping(session));
         }
@@ -347,15 +364,16 @@ public class PostgreSqlClient
             return Optional.of(typedVarcharColumnMapping(jdbcTypeName));
         }
         if (typeHandle.getJdbcType() == Types.TIME) {
-            // When inserting a time such as 12:34:56.999, Postgres returns 12:34:56.999999999. If we use rounding semantics, the time turns into 00:00:00.000 when
-            // reading it back into a time(3). Hence, truncate instead
-            return Optional.of(timeColumnMappingWithTruncation());
+            int decimalDigits = typeHandle.getDecimalDigits().orElseThrow(() -> new IllegalStateException("decimal digits not present"));
+            return Optional.of(timeColumnMapping(decimalDigits));
         }
         if (typeHandle.getJdbcType() == Types.TIMESTAMP) {
+            int decimalDigits = typeHandle.getDecimalDigits().orElseThrow(() -> new IllegalStateException("decimal digits not present"));
+            TimestampType timestampType = createTimestampType(decimalDigits);
             return Optional.of(ColumnMapping.longMapping(
-                    TIMESTAMP_MILLIS,
-                    timestampReadFunction(),
-                    timestampWriteFunction()));
+                    timestampType,
+                    timestampReadFunction(timestampType),
+                    PostgreSqlClient::shortTimestampWriteFunction));
         }
         if (typeHandle.getJdbcType() == Types.NUMERIC && getDecimalRounding(session) == ALLOW_OVERFLOW) {
             if (typeHandle.getColumnSize() == 131089) {
@@ -364,8 +382,9 @@ public class PostgreSqlClient
                 return Optional.of(decimalColumnMapping(createDecimalType(Decimals.MAX_PRECISION, getDecimalDefaultScale(session)), getDecimalRoundingMode(session)));
             }
             int precision = typeHandle.getColumnSize();
+            int decimalDigits = typeHandle.getDecimalDigits().orElseThrow(() -> new IllegalStateException("decimal digits not present"));
             if (precision > Decimals.MAX_PRECISION) {
-                int scale = min(typeHandle.getDecimalDigits(), getDecimalDefaultScale(session));
+                int scale = min(decimalDigits, getDecimalDefaultScale(session));
                 return Optional.of(decimalColumnMapping(createDecimalType(Decimals.MAX_PRECISION, scale), getDecimalRoundingMode(session)));
             }
         }
@@ -428,14 +447,32 @@ public class PostgreSqlClient
         if (VARBINARY.equals(type)) {
             return WriteMapping.sliceMapping("bytea", varbinaryWriteFunction());
         }
-        if (TIME.equals(type)) {
-            return WriteMapping.longMapping("time", timeWriteFunction());
+        if (type instanceof TimeType) {
+            TimeType timeType = (TimeType) type;
+            if (timeType.getPrecision() <= POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION) {
+                return WriteMapping.longMapping(format("time(%s)", timeType.getPrecision()), timeWriteFunction(timeType.getPrecision()));
+            }
+            return WriteMapping.longMapping(format("time(%s)", POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION), timeWriteFunction(POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION));
         }
-        if (TIMESTAMP_MILLIS.equals(type)) {
-            return WriteMapping.longMapping("timestamp", timestampWriteFunction());
+        if (type instanceof TimestampType) {
+            TimestampType timestampType = (TimestampType) type;
+            if (timestampType.getPrecision() <= POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION) {
+                verify(timestampType.getPrecision() <= TimestampType.MAX_SHORT_PRECISION);
+                return WriteMapping.longMapping(format("timestamp(%s)", timestampType.getPrecision()), PostgreSqlClient::shortTimestampWriteFunction);
+            }
+            verify(timestampType.getPrecision() > TimestampType.MAX_SHORT_PRECISION);
+            return WriteMapping.objectMapping(format("timestamp(%s)", POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION), longTimestampWriteFunction());
         }
-        if (TIMESTAMP_WITH_TIME_ZONE.equals(type)) {
-            return WriteMapping.longMapping("timestamptz", timestampWithTimeZoneWriteFunction());
+        if (type instanceof TimestampWithTimeZoneType) {
+            TimestampWithTimeZoneType timestampWithTimeZoneType = (TimestampWithTimeZoneType) type;
+            if (timestampWithTimeZoneType.getPrecision() <= POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION) {
+                String dataType = format("timestamptz(%d)", timestampWithTimeZoneType.getPrecision());
+                if (timestampWithTimeZoneType.getPrecision() <= TimestampWithTimeZoneType.MAX_SHORT_PRECISION) {
+                    return WriteMapping.longMapping(dataType, shortTimestampWithTimeZoneWriteFunction());
+                }
+                return WriteMapping.objectMapping(dataType, longTimestampWithTimeZoneWriteFunction());
+            }
+            return WriteMapping.objectMapping(format("timestamptz(%d)", POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION), longTimestampWithTimeZoneWriteFunction());
         }
         if (TinyintType.TINYINT.equals(type)) {
             return WriteMapping.longMapping("smallint", tinyintWriteFunction());
@@ -463,7 +500,7 @@ public class PostgreSqlClient
 
     private static Optional<JdbcTypeHandle> toTypeHandle(DecimalType decimalType)
     {
-        return Optional.of(new JdbcTypeHandle(Types.NUMERIC, Optional.of("decimal"), decimalType.getPrecision(), decimalType.getScale(), Optional.empty(), Optional.empty()));
+        return Optional.of(new JdbcTypeHandle(Types.NUMERIC, Optional.of("decimal"), decimalType.getPrecision(), Optional.of(decimalType.getScale()), Optional.empty(), Optional.empty()));
     }
 
     @Override
@@ -478,36 +515,142 @@ public class PostgreSqlClient
         return true;
     }
 
-    // When writing with setObject() using LocalDateTime, driver converts the value to string representing date-time in JVM zone,
-    // therefore cannot represent local date-time which is a "gap" in this zone.
-    // TODO replace this method with StandardColumnMappings#timestampWriteFunction when https://github.com/pgjdbc/pgjdbc/issues/1390 is done
-    private static LongWriteFunction timestampWriteFunction()
+    private static ColumnMapping timeColumnMapping(int precision)
     {
-        return (statement, index, value) -> {
-            LocalDateTime localDateTime = fromPrestoTimestamp(value);
-            statement.setObject(index, toPgTimestamp(localDateTime));
+        verify(precision <= 6, "Unsupported precision: %s", precision); // PostgreSQL limit but also assumption within this method
+        return ColumnMapping.longMapping(
+                createTimeType(precision),
+                (resultSet, columnIndex) -> {
+                    LocalTime time = resultSet.getObject(columnIndex, LocalTime.class);
+                    long nanosOfDay = time.toNanoOfDay();
+                    if (nanosOfDay == NANOSECONDS_PER_DAY - 1) {
+                        // PostgreSQL's 24:00:00 is returned as 23:59:59.999999999, regardless of column precision
+                        nanosOfDay = NANOSECONDS_PER_DAY - LongMath.pow(10, 9 - precision);
+                    }
+
+                    long picosOfDay = nanosOfDay * PICOSECONDS_PER_NANOSECOND;
+                    return round(picosOfDay, 12 - precision);
+                },
+                timeWriteFunction(precision),
+                // Pushdown disabled because PostgreSQL distinguishes TIME '24:00:00' and TIME '00:00:00' whereas Presto does not.
+                DISABLE_PUSHDOWN);
+    }
+
+    public static LongWriteFunction timeWriteFunction(int precision)
+    {
+        checkArgument(precision <= 6, "Unsupported precision: %s", precision); // PostgreSQL limit but also assumption within this method
+        DateTimeFormatter dateTimeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSSSSS");
+        return (statement, index, picosOfDay) -> {
+            picosOfDay = round(picosOfDay, 12 - precision);
+            if (picosOfDay == PICOSECONDS_PER_DAY) {
+                picosOfDay = 0;
+            }
+            LocalTime localTime = LocalTime.ofNanoOfDay(picosOfDay / PICOSECONDS_PER_NANOSECOND);
+            // statement.setObject(.., localTime) would yield incorrect end result for 23:59:59.999000
+            PGobject pgObject = new PGobject();
+            pgObject.setType("time");
+            pgObject.setValue(dateTimeFormatter.format(localTime));
+            statement.setObject(index, pgObject);
         };
     }
 
-    private static ColumnMapping timestampWithTimeZoneColumnMapping()
+    // When writing with setObject() using LocalDateTime, driver converts the value to string representing date-time in JVM zone,
+    // therefore cannot represent local date-time which is a "gap" in this zone.
+    // TODO replace this method with StandardColumnMappings#timestampWriteFunction when https://github.com/pgjdbc/pgjdbc/issues/1390 is done
+    private static void shortTimestampWriteFunction(PreparedStatement statement, int index, long epochMicros)
+            throws SQLException
     {
-        return ColumnMapping.longMapping(
-                TIMESTAMP_WITH_TIME_ZONE,
-                (resultSet, columnIndex) -> {
-                    // PostgreSQL does not store zone information in "timestamp with time zone" data type
-                    long millisUtc = resultSet.getTimestamp(columnIndex).getTime();
-                    return packDateTimeWithZone(millisUtc, UTC_KEY);
-                },
-                timestampWithTimeZoneWriteFunction());
+        LocalDateTime localDateTime = fromPrestoTimestamp(epochMicros);
+        statement.setObject(index, toPgTimestamp(localDateTime));
     }
 
-    private static LongWriteFunction timestampWithTimeZoneWriteFunction()
+    private static ObjectWriteFunction longTimestampWriteFunction()
+    {
+        return ObjectWriteFunction.of(LongTimestamp.class, ((statement, index, timestamp) -> {
+            // PostgreSQL supports up to 6 digits of precision
+            //noinspection ConstantConditions
+            verify(POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION == 6);
+
+            long epochMicros = timestamp.getEpochMicros();
+            if (timestamp.getPicosOfMicro() >= PICOSECONDS_PER_MICROSECOND / 2) {
+                epochMicros++;
+            }
+            shortTimestampWriteFunction(statement, index, epochMicros);
+        }));
+    }
+
+    @Override
+    public void setColumnComment(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column, Optional<String> comment)
+    {
+        String sql = format(
+                "COMMENT ON COLUMN %s.%s IS %s",
+                quoted(handle.getRemoteTableName()),
+                quoted(column.getColumnName()),
+                comment.isPresent() ? format("'%s'", comment.get()) : "NULL");
+        execute(identity, sql);
+    }
+
+    private static ColumnMapping timestampWithTimeZoneColumnMapping(int precision)
+    {
+        // PosgreSQL supports timestamptz precision up to microseconds
+        checkArgument(precision <= POSTGRESQL_MAX_SUPPORTED_TIMESTAMP_PRECISION, "unsupported precision value %d", precision);
+        TimestampWithTimeZoneType prestoType = createTimestampWithTimeZoneType(precision);
+        if (precision <= TimestampWithTimeZoneType.MAX_SHORT_PRECISION) {
+            return ColumnMapping.longMapping(
+                    prestoType,
+                    shortTimestampWithTimeZoneReadFunction(),
+                    shortTimestampWithTimeZoneWriteFunction());
+        }
+        else {
+            return ColumnMapping.objectMapping(
+                    prestoType,
+                    longTimestampWithTimeZoneReadFunction(),
+                    longTimestampWithTimeZoneWriteFunction());
+        }
+    }
+
+    private static LongReadFunction shortTimestampWithTimeZoneReadFunction()
+    {
+        return (resultSet, columnIndex) -> {
+            // PostgreSQL does not store zone information in "timestamp with time zone" data type
+            long millisUtc = resultSet.getTimestamp(columnIndex).getTime();
+            return packDateTimeWithZone(millisUtc, UTC_KEY);
+        };
+    }
+
+    private static LongWriteFunction shortTimestampWithTimeZoneWriteFunction()
     {
         return (statement, index, value) -> {
             // PostgreSQL does not store zone information in "timestamp with time zone" data type
             long millisUtc = unpackMillisUtc(value);
             statement.setTimestamp(index, new Timestamp(millisUtc));
         };
+    }
+
+    private static ObjectReadFunction longTimestampWithTimeZoneReadFunction()
+    {
+        return ObjectReadFunction.of(
+                LongTimestampWithTimeZone.class,
+                (resultSet, columnIndex) -> {
+                    // PostgreSQL does not store zone information in "timestamp with time zone" data type
+                    OffsetDateTime offsetDateTime = resultSet.getObject(columnIndex, OffsetDateTime.class);
+                    return LongTimestampWithTimeZone.fromEpochSecondsAndFraction(
+                            offsetDateTime.toEpochSecond(),
+                            (long) offsetDateTime.getNano() * PICOSECONDS_PER_NANOSECOND,
+                            UTC_KEY);
+                });
+    }
+
+    private static ObjectWriteFunction longTimestampWithTimeZoneWriteFunction()
+    {
+        return ObjectWriteFunction.of(
+                LongTimestampWithTimeZone.class,
+                (statement, index, value) -> {
+                    // PostgreSQL does not store zone information in "timestamp with time zone" data type
+                    long epochSeconds = value.getEpochMillis() / MILLISECONDS_PER_SECOND;
+                    long nanosOfSecond = value.getEpochMillis() % MILLISECONDS_PER_SECOND * NANOSECONDS_PER_MILLISECOND + value.getPicosOfMilli() / PICOSECONDS_PER_NANOSECOND;
+                    statement.setObject(index, OffsetDateTime.ofInstant(Instant.ofEpochSecond(epochSeconds, nanosOfSecond), UTC_KEY.getZoneId()));
+                });
     }
 
     private ColumnMapping hstoreColumnMapping(ConnectorSession session)
@@ -650,12 +793,14 @@ public class PostgreSqlClient
         try {
             TypeInfo typeInfo = connection.unwrap(PgConnection.class).getTypeInfo();
             int pgElementOid = typeInfo.getPGArrayElement(typeInfo.getPGType(jdbcTypeName));
+            verify(arrayTypeHandle.getCaseSensitivity().isEmpty(), "Case sensitivity not supported");
             return new JdbcTypeHandle(
                     typeInfo.getSQLType(pgElementOid),
                     Optional.of(typeInfo.getPGType(pgElementOid)),
                     arrayTypeHandle.getColumnSize(),
                     arrayTypeHandle.getDecimalDigits(),
-                    arrayTypeHandle.getArrayDimensions());
+                    arrayTypeHandle.getArrayDimensions(),
+                    Optional.empty());
         }
         catch (SQLException e) {
             throw new PrestoException(JDBC_ERROR, e);
@@ -729,14 +874,18 @@ public class PostgreSqlClient
     private static SliceWriteFunction uuidWriteFunction()
     {
         return (statement, index, value) -> {
-            UUID uuid = new UUID(value.getLong(0), value.getLong(SIZE_OF_LONG));
+            long high = Long.reverseBytes(value.getLong(0));
+            long low = Long.reverseBytes(value.getLong(SIZE_OF_LONG));
+            UUID uuid = new UUID(high, low);
             statement.setObject(index, uuid, Types.OTHER);
         };
     }
 
     private static Slice uuidSlice(UUID uuid)
     {
-        return wrappedLongArray(uuid.getMostSignificantBits(), uuid.getLeastSignificantBits());
+        return wrappedLongArray(
+                Long.reverseBytes(uuid.getMostSignificantBits()),
+                Long.reverseBytes(uuid.getLeastSignificantBits()));
     }
 
     private ColumnMapping uuidColumnMapping()

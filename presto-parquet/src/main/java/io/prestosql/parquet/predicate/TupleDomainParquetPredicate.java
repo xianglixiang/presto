@@ -30,6 +30,7 @@ import io.prestosql.spi.predicate.ValueSet;
 import io.prestosql.spi.type.DecimalType;
 import io.prestosql.spi.type.TimestampType;
 import io.prestosql.spi.type.Type;
+import io.prestosql.spi.type.VarcharType;
 import org.apache.parquet.column.ColumnDescriptor;
 import org.apache.parquet.column.statistics.BinaryStatistics;
 import org.apache.parquet.column.statistics.BooleanStatistics;
@@ -48,8 +49,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.function.Function;
 
-import static io.prestosql.parquet.ParquetTimestampUtils.getTimestampMillis;
+import static io.prestosql.parquet.ParquetTimestampUtils.decode;
 import static io.prestosql.parquet.predicate.PredicateUtils.isStatisticsOverflow;
+import static io.prestosql.plugin.base.type.PrestoTimestampEncoderFactory.createTimestampEncoder;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
 import static io.prestosql.spi.type.DateType.DATE;
@@ -58,9 +60,7 @@ import static io.prestosql.spi.type.DoubleType.DOUBLE;
 import static io.prestosql.spi.type.IntegerType.INTEGER;
 import static io.prestosql.spi.type.RealType.REAL;
 import static io.prestosql.spi.type.SmallintType.SMALLINT;
-import static io.prestosql.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
-import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.lang.Float.floatToRawIntBits;
 import static java.lang.String.format;
 import static java.util.Objects.requireNonNull;
@@ -226,7 +226,7 @@ public class TupleDomainParquetPredicate
             return createDomain(type, hasNullValue, parquetDoubleStatistics);
         }
 
-        if (isVarcharType(type) && statistics instanceof BinaryStatistics) {
+        if (type instanceof VarcharType && statistics instanceof BinaryStatistics) {
             BinaryStatistics binaryStatistics = (BinaryStatistics) statistics;
             Slice minSlice = Slices.wrappedBuffer(binaryStatistics.genericGetMin().getBytes());
             Slice maxSlice = Slices.wrappedBuffer(binaryStatistics.genericGetMax().getBytes());
@@ -250,16 +250,16 @@ public class TupleDomainParquetPredicate
 
         if (type instanceof TimestampType && statistics instanceof BinaryStatistics) {
             BinaryStatistics binaryStatistics = (BinaryStatistics) statistics;
-            long max = getTimestampMillis(binaryStatistics.genericGetMax());
-            max = timeZone.convertUTCToLocal(max) * MICROSECONDS_PER_MILLISECOND;
-            long min = getTimestampMillis(binaryStatistics.genericGetMin());
-            min = timeZone.convertUTCToLocal(min) * MICROSECONDS_PER_MILLISECOND;
-            if (min > max) {
-                failWithCorruptionException(failOnCorruptedParquetStatistics, column, id, binaryStatistics);
-                return Domain.create(ValueSet.all(type), hasNullValue);
+            // Parquet INT96 timestamp values were compared incorrectly for the purposes of producing statistics by older parquet writers, so
+            // PARQUET-1065 deprecated them. The result is that any writer that produced stats was producing unusable incorrect values, except
+            // the special case where min == max and an incorrect ordering would not be material to the result. PARQUET-1026 made binary stats
+            // available and valid in that special case
+            if (binaryStatistics.genericGetMin().equals(binaryStatistics.genericGetMax())) {
+                return Domain.create(ValueSet.of(
+                        type,
+                        createTimestampEncoder((TimestampType) type, timeZone).getTimestamp(decode(binaryStatistics.genericGetMax()))),
+                        hasNullValue);
             }
-            ParquetTimestampStatistics parquetTimestampStatistics = new ParquetTimestampStatistics(min, max);
-            return createDomain(type, hasNullValue, parquetTimestampStatistics);
         }
 
         return Domain.create(ValueSet.all(type), hasNullValue);
@@ -358,7 +358,7 @@ public class TupleDomainParquetPredicate
             return Domain.union(domains);
         }
 
-        if (isVarcharType(type) && columnDescriptor.getPrimitiveType().getPrimitiveTypeName() == PrimitiveTypeName.BINARY) {
+        if (type instanceof VarcharType && columnDescriptor.getPrimitiveType().getPrimitiveTypeName() == PrimitiveTypeName.BINARY) {
             List<Domain> domains = new ArrayList<>();
             for (int i = 0; i < dictionarySize; i++) {
                 domains.add(Domain.singleValue(type, Slices.wrappedBuffer(dictionary.decodeToBinary(i).getBytes())));
@@ -378,7 +378,7 @@ public class TupleDomainParquetPredicate
         }
     }
 
-    private static <T extends Comparable<T>> Domain createDomain(Type type, boolean hasNullValue, ParquetRangeStatistics<T> rangeStatistics)
+    public static <T extends Comparable<T>> Domain createDomain(Type type, boolean hasNullValue, ParquetRangeStatistics<T> rangeStatistics)
     {
         return createDomain(type, hasNullValue, rangeStatistics, value -> value);
     }

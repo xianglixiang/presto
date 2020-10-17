@@ -22,6 +22,7 @@ import io.prestosql.metadata.Metadata;
 import io.prestosql.metadata.TableHandle;
 import io.prestosql.plugin.tpch.TpchColumnHandle;
 import io.prestosql.plugin.tpch.TpchTableHandle;
+import io.prestosql.spi.type.TypeOperators;
 import io.prestosql.sql.parser.SqlParser;
 import io.prestosql.sql.planner.Plan;
 import io.prestosql.sql.planner.PlanNodeIdAllocator;
@@ -68,6 +69,7 @@ public class TestRemoveUnsupportedDynamicFilters
         extends BasePlanTest
 {
     private Metadata metadata;
+    private TypeOperators typeOperators = new TypeOperators();
     private PlanBuilder builder;
     private Symbol lineitemOrderKeySymbol;
     private TableScanNode lineitemTableScanNode;
@@ -116,6 +118,7 @@ public class TestRemoveUnsupportedDynamicFilters
                 join(
                         INNER,
                         ImmutableList.of(equiJoinClause("ORDERS_OK", "LINEITEM_OK")),
+                        ImmutableMap.of(),
                         PlanMatchPattern.filter(
                                 expression("ORDERS_OK > 0"),
                                 TRUE_LITERAL,
@@ -144,8 +147,10 @@ public class TestRemoveUnsupportedDynamicFilters
                 ImmutableMap.of(new DynamicFilterId("DF"), lineitemOrderKeySymbol));
         assertPlan(
                 removeUnsupportedDynamicFilters(root),
-                join(INNER,
+                join(
+                        INNER,
                         ImmutableList.of(equiJoinClause("ORDERS_OK", "LINEITEM_OK")),
+                        ImmutableMap.of("ORDERS_OK", "LINEITEM_OK"),
                         PlanMatchPattern.filter(
                                 TRUE_LITERAL,
                                 createDynamicFilterExpression(metadata, new DynamicFilterId("DF"), BIGINT, new SymbolReference("ORDERS_OK")),
@@ -178,8 +183,10 @@ public class TestRemoveUnsupportedDynamicFilters
         assertPlan(
                 removeUnsupportedDynamicFilters(root),
                 output(
-                        join(INNER,
+                        join(
+                                INNER,
                                 ImmutableList.of(equiJoinClause("ORDERS_OK", "LINEITEM_OK")),
+                                ImmutableMap.of(),
                                 tableScan("orders", ImmutableMap.of("ORDERS_OK", "orderkey")),
                                 filter(
                                         expression("LINEITEM_OK > 0"),
@@ -214,6 +221,7 @@ public class TestRemoveUnsupportedDynamicFilters
                         join(
                                 INNER,
                                 ImmutableList.of(equiJoinClause("LINEITEM_OK", "ORDERS_OK")),
+                                ImmutableMap.of(),
                                 filter(
                                         expression("LINEITEM_OK > 0"),
                                         values("LINEITEM_OK")),
@@ -251,8 +259,10 @@ public class TestRemoveUnsupportedDynamicFilters
         assertPlan(
                 removeUnsupportedDynamicFilters(root),
                 output(
-                        join(INNER,
+                        join(
+                                INNER,
                                 ImmutableList.of(equiJoinClause("ORDERS_OK", "LINEITEM_OK")),
+                                ImmutableMap.of(),
                                 tableScan("orders", ImmutableMap.of("ORDERS_OK", "orderkey")),
                                 tableScan("lineitem", ImmutableMap.of("LINEITEM_OK", "orderkey")))));
     }
@@ -289,6 +299,7 @@ public class TestRemoveUnsupportedDynamicFilters
                         join(
                                 INNER,
                                 ImmutableList.of(equiJoinClause("ORDERS_OK", "LINEITEM_OK")),
+                                ImmutableMap.of(),
                                 tableScan("orders", ImmutableMap.of("ORDERS_OK", "orderkey")),
                                 filter(
                                         combineDisjuncts(
@@ -433,7 +444,13 @@ public class TestRemoveUnsupportedDynamicFilters
             // metadata.getCatalogHandle() registers the catalog for the transaction
             session.getCatalog().ifPresent(catalog -> metadata.getCatalogHandle(session, catalog));
             PlanNode rewrittenPlan = new RemoveUnsupportedDynamicFilters(metadata).optimize(root, session, TypeProvider.empty(), new SymbolAllocator(), new PlanNodeIdAllocator(), WarningCollector.NOOP);
-            new DynamicFiltersChecker().validate(rewrittenPlan, session, metadata, new TypeAnalyzer(new SqlParser(), metadata), TypeProvider.empty(), WarningCollector.NOOP);
+            new DynamicFiltersChecker().validate(rewrittenPlan,
+                    session,
+                    metadata,
+                    typeOperators,
+                    new TypeAnalyzer(new SqlParser(), metadata),
+                    TypeProvider.empty(),
+                    WarningCollector.NOOP);
             return rewrittenPlan;
         });
     }

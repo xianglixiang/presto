@@ -20,15 +20,11 @@ import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableSet;
 import io.airlift.compress.lzo.LzoCodec;
 import io.airlift.compress.lzo.LzopCodec;
-import io.airlift.json.JsonCodec;
-import io.airlift.json.JsonCodecFactory;
-import io.airlift.json.ObjectMapperProvider;
 import io.airlift.slice.Slice;
 import io.airlift.slice.SliceUtf8;
 import io.airlift.slice.Slices;
 import io.prestosql.hadoop.TextLineLengthLimitExceededException;
 import io.prestosql.orc.OrcWriterOptions;
-import io.prestosql.plugin.base.CatalogName;
 import io.prestosql.plugin.hive.HiveColumnHandle;
 import io.prestosql.plugin.hive.HivePartitionKey;
 import io.prestosql.plugin.hive.HiveType;
@@ -37,8 +33,6 @@ import io.prestosql.plugin.hive.metastore.Column;
 import io.prestosql.plugin.hive.metastore.Table;
 import io.prestosql.spi.ErrorCodeSupplier;
 import io.prestosql.spi.PrestoException;
-import io.prestosql.spi.connector.ConnectorViewDefinition;
-import io.prestosql.spi.connector.ConnectorViewDefinition.ViewColumn;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.predicate.NullableValue;
 import io.prestosql.spi.type.ArrayType;
@@ -48,7 +42,6 @@ import io.prestosql.spi.type.Decimals;
 import io.prestosql.spi.type.MapType;
 import io.prestosql.spi.type.RowType;
 import io.prestosql.spi.type.Type;
-import io.prestosql.spi.type.TypeId;
 import io.prestosql.spi.type.TypeManager;
 import io.prestosql.spi.type.VarbinaryType;
 import io.prestosql.spi.type.VarcharType;
@@ -95,7 +88,6 @@ import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.math.BigDecimal;
 import java.math.BigInteger;
-import java.util.Base64;
 import java.util.List;
 import java.util.Optional;
 import java.util.OptionalInt;
@@ -125,14 +117,11 @@ import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_BAD_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_CANNOT_OPEN_SPLIT;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_INVALID_METADATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_INVALID_PARTITION_VALUE;
-import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_INVALID_VIEW_DATA;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_SERDE_NOT_FOUND;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_UNSUPPORTED_FORMAT;
 import static io.prestosql.plugin.hive.HiveMetadata.SKIP_FOOTER_COUNT_KEY;
 import static io.prestosql.plugin.hive.HiveMetadata.SKIP_HEADER_COUNT_KEY;
-import static io.prestosql.plugin.hive.HiveMetadata.TABLE_COMMENT;
 import static io.prestosql.plugin.hive.HivePartitionKey.HIVE_DEFAULT_DYNAMIC_PARTITION;
-import static io.prestosql.plugin.hive.HiveQlToPrestoTranslator.translateHiveViewToPresto;
 import static io.prestosql.plugin.hive.HiveTableProperties.ORC_BLOOM_FILTER_COLUMNS;
 import static io.prestosql.plugin.hive.HiveTableProperties.ORC_BLOOM_FILTER_FPP;
 import static io.prestosql.plugin.hive.HiveType.toHiveTypes;
@@ -143,7 +132,6 @@ import static io.prestosql.spi.StandardErrorCode.GENERIC_INTERNAL_ERROR;
 import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 import static io.prestosql.spi.type.BigintType.BIGINT;
 import static io.prestosql.spi.type.BooleanType.BOOLEAN;
-import static io.prestosql.spi.type.Chars.isCharType;
 import static io.prestosql.spi.type.Chars.trimTrailingSpaces;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
@@ -154,7 +142,6 @@ import static io.prestosql.spi.type.SmallintType.SMALLINT;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
 import static io.prestosql.spi.type.Timestamps.MICROSECONDS_PER_MILLISECOND;
 import static io.prestosql.spi.type.TinyintType.TINYINT;
-import static io.prestosql.spi.type.Varchars.isVarcharType;
 import static java.lang.Byte.parseByte;
 import static java.lang.Double.parseDouble;
 import static java.lang.Float.floatToRawIntBits;
@@ -177,13 +164,6 @@ import static org.apache.hadoop.hive.serde2.objectinspector.ObjectInspector.Cate
 
 public final class HiveUtil
 {
-    public static final String PRESTO_VIEW_FLAG = "presto_view";
-
-    private static final String VIEW_PREFIX = "/* Presto View: ";
-    private static final String VIEW_SUFFIX = " */";
-    private static final JsonCodec<ConnectorViewDefinition> VIEW_CODEC =
-            new JsonCodecFactory(new ObjectMapperProvider()).jsonCodec(ConnectorViewDefinition.class);
-
     private static final DateTimeFormatter HIVE_DATE_PARSER = ISODateTimeFormat.date().withZoneUTC();
     private static final DateTimeFormatter HIVE_TIMESTAMP_PARSER;
     private static final Field COMPRESSION_CODECS_FIELD;
@@ -519,8 +499,8 @@ public final class HiveUtil
                 DOUBLE.equals(type) ||
                 DATE.equals(type) ||
                 TIMESTAMP_MILLIS.equals(type) ||
-                isVarcharType(type) ||
-                isCharType(type);
+                type instanceof VarcharType ||
+                type instanceof CharType;
     }
 
     public static NullableValue parsePartitionValue(String partitionName, String value, Type type)
@@ -632,14 +612,14 @@ public final class HiveUtil
             return NullableValue.of(DOUBLE, doublePartitionKey(value, partitionName));
         }
 
-        if (isVarcharType(type)) {
+        if (type instanceof VarcharType) {
             if (isNull) {
                 return NullableValue.asNull(type);
             }
             return NullableValue.of(type, varcharPartitionKey(value, partitionName, type));
         }
 
-        if (isCharType(type)) {
+        if (type instanceof CharType) {
             if (isNull) {
                 return NullableValue.asNull(type);
             }
@@ -654,44 +634,6 @@ public final class HiveUtil
         }
 
         throw new VerifyException(format("Unhandled type [%s] for partition: %s", type, partitionName));
-    }
-
-    public static boolean isPrestoView(Table table)
-    {
-        return "true".equals(table.getParameters().get(PRESTO_VIEW_FLAG));
-    }
-
-    public static String encodeViewData(ConnectorViewDefinition definition)
-    {
-        byte[] bytes = VIEW_CODEC.toJsonBytes(definition);
-        String data = Base64.getEncoder().encodeToString(bytes);
-        return VIEW_PREFIX + data + VIEW_SUFFIX;
-    }
-
-    public static ConnectorViewDefinition decodeViewData(String data)
-    {
-        checkCondition(data.startsWith(VIEW_PREFIX), HIVE_INVALID_VIEW_DATA, "View data missing prefix: %s", data);
-        checkCondition(data.endsWith(VIEW_SUFFIX), HIVE_INVALID_VIEW_DATA, "View data missing suffix: %s", data);
-        data = data.substring(VIEW_PREFIX.length());
-        data = data.substring(0, data.length() - VIEW_SUFFIX.length());
-        byte[] bytes = Base64.getDecoder().decode(data);
-        return VIEW_CODEC.fromJson(bytes);
-    }
-
-    public static ConnectorViewDefinition buildHiveViewConnectorDefinition(CatalogName catalogName, Table view)
-    {
-        String viewText = view.getViewExpandedText()
-                .orElseThrow(() -> new PrestoException(HIVE_INVALID_METADATA, "No view expanded text: " + view.getSchemaTableName()));
-        return new ConnectorViewDefinition(
-                translateHiveViewToPresto(viewText),
-                Optional.of(catalogName.toString()),
-                Optional.ofNullable(view.getDatabaseName()),
-                view.getDataColumns().stream()
-                        .map(column -> new ViewColumn(column.getName(), TypeId.of(column.getType().getTypeSignature().toString())))
-                        .collect(toImmutableList()),
-                Optional.ofNullable(view.getParameters().get(TABLE_COMMENT)),
-                Optional.of(view.getOwner()),
-                false); // don't run as invoker
     }
 
     public static Optional<DecimalType> getDecimalType(HiveType hiveType)
@@ -877,12 +819,12 @@ public final class HiveUtil
         return partitionKey;
     }
 
-    public static List<HiveColumnHandle> hiveColumnHandles(Table table, TypeManager typeManager)
+    public static List<HiveColumnHandle> hiveColumnHandles(Table table, TypeManager typeManager, int timestampPrecision)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
         // add the data fields first
-        columns.addAll(getRegularColumnHandles(table, typeManager));
+        columns.addAll(getRegularColumnHandles(table, typeManager, timestampPrecision));
 
         // add the partition keys last (like Hive does)
         columns.addAll(getPartitionKeyColumnHandles(table, typeManager));
@@ -903,7 +845,7 @@ public final class HiveUtil
         return columns.build();
     }
 
-    public static List<HiveColumnHandle> getRegularColumnHandles(Table table, TypeManager typeManager)
+    public static List<HiveColumnHandle> getRegularColumnHandles(Table table, TypeManager typeManager, int timestampPrecision)
     {
         ImmutableList.Builder<HiveColumnHandle> columns = ImmutableList.builder();
 
@@ -912,7 +854,7 @@ public final class HiveUtil
             // ignore unsupported types rather than failing
             HiveType hiveType = field.getType();
             if (hiveType.isSupportedType(table.getStorage().getStorageFormat())) {
-                columns.add(createBaseColumn(field.getName(), hiveColumnIndex, hiveType, hiveType.getType(typeManager), REGULAR, field.getComment()));
+                columns.add(createBaseColumn(field.getName(), hiveColumnIndex, hiveType, hiveType.getType(typeManager, timestampPrecision), REGULAR, field.getComment()));
             }
             hiveColumnIndex++;
         }

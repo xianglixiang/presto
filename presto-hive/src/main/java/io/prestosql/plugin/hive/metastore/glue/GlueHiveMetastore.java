@@ -75,6 +75,7 @@ import io.prestosql.plugin.hive.metastore.Database;
 import io.prestosql.plugin.hive.metastore.HiveMetastore;
 import io.prestosql.plugin.hive.metastore.HivePrincipal;
 import io.prestosql.plugin.hive.metastore.HivePrivilegeInfo;
+import io.prestosql.plugin.hive.metastore.MetastoreUtil;
 import io.prestosql.plugin.hive.metastore.Partition;
 import io.prestosql.plugin.hive.metastore.PartitionWithStatistics;
 import io.prestosql.plugin.hive.metastore.PrincipalPrivileges;
@@ -113,6 +114,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.Future;
 import java.util.function.Function;
+import java.util.function.Predicate;
 
 import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.base.Strings.isNullOrEmpty;
@@ -122,9 +124,7 @@ import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_METASTORE_ERROR;
 import static io.prestosql.plugin.hive.HiveErrorCode.HIVE_PARTITION_DROPPED_DURING_QUERY;
 import static io.prestosql.plugin.hive.aws.AwsCurrentRegionHolder.getCurrentRegionFromEC2Metadata;
 import static io.prestosql.plugin.hive.metastore.MetastoreUtil.makePartitionName;
-import static io.prestosql.plugin.hive.metastore.MetastoreUtil.partitionKeyFilterToStringList;
 import static io.prestosql.plugin.hive.metastore.MetastoreUtil.verifyCanDropColumn;
-import static io.prestosql.plugin.hive.metastore.glue.GlueExpressionUtil.buildGlueExpression;
 import static io.prestosql.plugin.hive.metastore.thrift.ThriftMetastoreUtil.getHiveBasicStatistics;
 import static io.prestosql.plugin.hive.metastore.thrift.ThriftMetastoreUtil.updateStatisticsParameters;
 import static io.prestosql.plugin.hive.util.HiveUtil.toPartitionValues;
@@ -147,7 +147,6 @@ public class GlueHiveMetastore
 
     private static final String PUBLIC_ROLE_NAME = "public";
     private static final String DEFAULT_METASTORE_USER = "presto";
-    private static final String WILDCARD_EXPRESSION = "";
     private static final int BATCH_GET_PARTITION_MAX_PAGE_SIZE = 1000;
     private static final int BATCH_CREATE_PARTITION_MAX_PAGE_SIZE = 100;
     private static final int AWS_GLUE_GET_PARTITIONS_MAX_RESULTS = 1000;
@@ -164,6 +163,7 @@ public class GlueHiveMetastore
     private final GlueMetastoreStats stats = new GlueMetastoreStats();
     private final GlueColumnStatisticsProvider columnStatisticsProvider;
     private final boolean assumeCanonicalPartitionKeys;
+    private final Predicate<com.amazonaws.services.glue.model.Table> tableFilter;
 
     @Inject
     public GlueHiveMetastore(
@@ -171,7 +171,8 @@ public class GlueHiveMetastore
             GlueHiveMetastoreConfig glueConfig,
             GlueColumnStatisticsProvider columnStatisticsProvider,
             @ForGlueHiveMetastore Executor executor,
-            @ForGlueHiveMetastore Optional<RequestHandler2> requestHandler)
+            @ForGlueHiveMetastore Optional<RequestHandler2> requestHandler,
+            @ForGlueHiveMetastore Predicate<com.amazonaws.services.glue.model.Table> tableFilter)
     {
         requireNonNull(glueConfig, "glueConfig is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
@@ -183,6 +184,7 @@ public class GlueHiveMetastore
         this.executor = requireNonNull(executor, "executor is null");
         this.columnStatisticsProvider = requireNonNull(columnStatisticsProvider, "columnStatisticsProvider is null");
         this.assumeCanonicalPartitionKeys = glueConfig.isAssumeCanonicalPartitionKeys();
+        this.tableFilter = requireNonNull(tableFilter, "tableFilter is null");
     }
 
     private static AWSGlueAsync createAsyncGlueClient(GlueHiveMetastoreConfig config, Optional<RequestHandler2> requestHandler)
@@ -405,7 +407,10 @@ public class GlueHiveMetastore
                             .withCatalogId(catalogId)
                             .withDatabaseName(databaseName)
                             .withNextToken(nextToken));
-                    result.getTableList().forEach(table -> tableNames.add(table.getName()));
+                    result.getTableList().stream()
+                            .filter(tableFilter)
+                            .map(com.amazonaws.services.glue.model.Table::getName)
+                            .forEach(tableNames::add);
                     nextToken = result.getNextToken();
                 }
                 while (nextToken != null);
@@ -710,14 +715,12 @@ public class GlueHiveMetastore
         if (partitionKeysFilter.isNone()) {
             return Optional.of(ImmutableList.of());
         }
-
-        Optional<List<String>> parts = partitionKeyFilterToStringList(columnNames, partitionKeysFilter, assumeCanonicalPartitionKeys);
-        if (parts.isEmpty()) {
+        if (MetastoreUtil.isPartitionKeyFilterFalse(partitionKeysFilter)) {
             return Optional.of(ImmutableList.of());
         }
 
         Table table = getExistingTable(identity, databaseName, tableName);
-        String expression = buildGlueExpression(table.getPartitionColumns(), parts.get());
+        String expression = GlueExpressionUtil.buildGlueExpression(columnNames, partitionKeysFilter, assumeCanonicalPartitionKeys);
         List<Partition> partitions = getPartitions(table, expression);
         return Optional.of(buildPartitionNames(table.getPartitionColumns(), partitions));
     }

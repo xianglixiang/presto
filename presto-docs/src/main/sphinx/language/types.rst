@@ -153,8 +153,13 @@ Example: ``DATE '2001-08-22'``
 ``TIME``
 ^^^^^^^^
 
-Time of day (hour, minute, second, millisecond) without a time zone.
-Values of this type are parsed and rendered in the session time zone.
+``TIME`` is an alias for ``TIME(3)`` (millisecond precision).
+
+``TIME(P)``
+^^^^^^^^^^^
+
+Time of day (hour, minute, second) without a time zone with ``P`` digits of precision
+for the fraction of seconds. A precision of up to 12 (picoseconds) is supported.
 
 Example: ``TIME '01:02:03.456'``
 
@@ -176,10 +181,9 @@ Example: ``TIME '01:02:03.456 America/Los_Angeles'``
 ``TIMESTAMP(P)``
 ^^^^^^^^^^^^^^^^
 
-Instant in time that includes the date and time of day without a time zone
-with ``P`` digits of precision for the fraction of seconds. A precision of
-up to 12 (picoseconds) is supported. Values of this type are parsed and
-rendered in the session time zone.
+Calendar date and time of day without a time zone with ``P`` digits of precision
+for the fraction of seconds. A precision of up to 12 (picoseconds) is supported.
+This type is effectively a combination of the ``DATE`` and ``TIME(P)`` types.
 
 ``TIMESTAMP(P) WITHOUT TIME ZONE`` is an equivalent name.
 
@@ -357,3 +361,23 @@ can be reused.  For example, one may be interested in a daily reading of the 99t
 percentile values that are read over the course of a week.  Instead of calculating
 the past week of data with ``approx_percentile``, ``qdigest``\ s could be stored
 daily, and quickly merged to retrieve the 99th percentile value.
+
+T-Digest
+---------------
+
+.. _tdigest_type:
+
+``TDigest``
+^^^^^^^^^^^
+
+A T-digest (tdigest) is a summary structure which, similarly to qdigest, captures the
+approximate distribution of data for a given input set. It can be queried to retrieve
+approximate quantile values from the distribution.
+
+TDigest has the following advantages compared to QDigest:
+
+* higher performance
+* lower memory usage
+* higher accuracy at high and low percentiles
+
+T-digests are additive, meaning they can be merged together.

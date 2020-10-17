@@ -23,8 +23,6 @@ import io.airlift.configuration.LegacyConfig;
 import io.airlift.units.DataSize;
 import io.airlift.units.Duration;
 import io.airlift.units.MaxDataSize;
-import io.airlift.units.MaxDuration;
-import io.airlift.units.MinDuration;
 import io.prestosql.operator.aggregation.arrayagg.ArrayAggGroupImplementation;
 import io.prestosql.operator.aggregation.histogram.HistogramGroupImplementation;
 import io.prestosql.operator.aggregation.multimapagg.MultimapAggGroupImplementation;
@@ -43,7 +41,6 @@ import static io.airlift.units.DataSize.Unit.KILOBYTE;
 import static io.airlift.units.DataSize.Unit.MEGABYTE;
 import static io.prestosql.sql.analyzer.RegexLibrary.JONI;
 import static java.util.Objects.requireNonNull;
-import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static java.util.concurrent.TimeUnit.MINUTES;
 
 @DefunctConfig({
@@ -53,13 +50,14 @@ import static java.util.concurrent.TimeUnit.MINUTES;
         "deprecated.legacy-row-field-ordinal-access",
         "deprecated.legacy-unnest-array-rows",
         "resource-group-manager",
+        "fast-inequality-joins",
         "experimental.resource-groups-enabled",
         "experimental-syntax-enabled",
         "analyzer.experimental-syntax-enabled",
         "optimizer.processing-optimization",
         "deprecated.legacy-order-by",
         "deprecated.legacy-join-using",
-        "deprecated.legacy-timestamp",
+        "deprecated.legacy-timestamp"
 })
 public class FeaturesConfig
 {
@@ -78,7 +76,6 @@ public class FeaturesConfig
     private boolean dynamicScheduleForGroupedExecution;
     private int concurrentLifespansPerTask;
     private boolean spatialJoinsEnabled = true;
-    private boolean fastInequalityJoins = true;
     private JoinReorderingStrategy joinReorderingStrategy = JoinReorderingStrategy.AUTOMATIC;
     private int maxReorderedJoins = 9;
     private boolean redistributeWrites = true;
@@ -134,11 +131,6 @@ public class FeaturesConfig
     private boolean iterativeRuleBasedColumnPruning = true;
 
     private Duration iterativeOptimizerTimeout = new Duration(3, MINUTES); // by default let optimizer wait a long time in case it retrieves some data from ConnectorMetadata
-    private boolean enableDynamicFiltering = true;
-    private int dynamicFilteringMaxPerDriverRowCount = 100;
-    private DataSize dynamicFilteringMaxPerDriverSize = DataSize.of(10, KILOBYTE);
-    private Duration dynamicFilteringRefreshInterval = new Duration(200, MILLISECONDS);
-
     private DataSize filterAndProjectMinOutputPageSize = DataSize.of(500, KILOBYTE);
     private int filterAndProjectMinOutputPageRowCount = 256;
     private int maxGroupingSets = 2048;
@@ -326,19 +318,6 @@ public class FeaturesConfig
     {
         this.spatialJoinsEnabled = spatialJoinsEnabled;
         return this;
-    }
-
-    @Config("fast-inequality-joins")
-    @ConfigDescription("Use faster handling of inequality joins if it is possible")
-    public FeaturesConfig setFastInequalityJoins(boolean fastInequalityJoins)
-    {
-        this.fastInequalityJoins = fastInequalityJoins;
-        return this;
-    }
-
-    public boolean isFastInequalityJoins()
-    {
-        return fastInequalityJoins;
     }
 
     public JoinReorderingStrategy getJoinReorderingStrategy()
@@ -738,61 +717,6 @@ public class FeaturesConfig
     public FeaturesConfig setSpillMaxUsedSpaceThreshold(double spillMaxUsedSpaceThreshold)
     {
         this.spillMaxUsedSpaceThreshold = spillMaxUsedSpaceThreshold;
-        return this;
-    }
-
-    public boolean isEnableDynamicFiltering()
-    {
-        return enableDynamicFiltering;
-    }
-
-    @Config("enable-dynamic-filtering")
-    @LegacyConfig("experimental.enable-dynamic-filtering")
-    public FeaturesConfig setEnableDynamicFiltering(boolean value)
-    {
-        this.enableDynamicFiltering = value;
-        return this;
-    }
-
-    public int getDynamicFilteringMaxPerDriverRowCount()
-    {
-        return dynamicFilteringMaxPerDriverRowCount;
-    }
-
-    @Config("dynamic-filtering-max-per-driver-row-count")
-    @LegacyConfig("experimental.dynamic-filtering-max-per-driver-row-count")
-    public FeaturesConfig setDynamicFilteringMaxPerDriverRowCount(int dynamicFilteringMaxPerDriverRowCount)
-    {
-        this.dynamicFilteringMaxPerDriverRowCount = dynamicFilteringMaxPerDriverRowCount;
-        return this;
-    }
-
-    @MaxDataSize("1MB")
-    public DataSize getDynamicFilteringMaxPerDriverSize()
-    {
-        return dynamicFilteringMaxPerDriverSize;
-    }
-
-    @Config("dynamic-filtering-max-per-driver-size")
-    @LegacyConfig("experimental.dynamic-filtering-max-per-driver-size")
-    public FeaturesConfig setDynamicFilteringMaxPerDriverSize(DataSize dynamicFilteringMaxPerDriverSize)
-    {
-        this.dynamicFilteringMaxPerDriverSize = dynamicFilteringMaxPerDriverSize;
-        return this;
-    }
-
-    @MinDuration("1ms")
-    @MaxDuration("10s")
-    @NotNull
-    public Duration getDynamicFilteringRefreshInterval()
-    {
-        return dynamicFilteringRefreshInterval;
-    }
-
-    @Config("experimental.dynamic-filtering-refresh-interval")
-    public FeaturesConfig setDynamicFilteringRefreshInterval(Duration dynamicFilteringRefreshInterval)
-    {
-        this.dynamicFilteringRefreshInterval = dynamicFilteringRefreshInterval;
         return this;
     }
 

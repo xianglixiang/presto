@@ -24,6 +24,7 @@ import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.expression.ConnectorExpression;
 import io.prestosql.spi.expression.Variable;
 import io.prestosql.spi.type.TypeManager;
+import io.prestosql.spi.type.TypeOperators;
 import io.prestosql.type.InternalTypeManager;
 import org.testng.annotations.Test;
 
@@ -43,20 +44,20 @@ import static org.testng.Assert.assertTrue;
 
 public class TestMySqlClient
 {
-    private static final TypeManager TYPE_MANAGER = new InternalTypeManager(createTestMetadataManager());
+    private static final TypeManager TYPE_MANAGER = new InternalTypeManager(createTestMetadataManager(), new TypeOperators());
 
     private static final JdbcColumnHandle BIGINT_COLUMN =
             JdbcColumnHandle.builder()
                     .setColumnName("c_bigint")
                     .setColumnType(BIGINT)
-                    .setJdbcTypeHandle(new JdbcTypeHandle(Types.BIGINT, Optional.of("int8"), 0, 0, Optional.empty()))
+                    .setJdbcTypeHandle(new JdbcTypeHandle(Types.BIGINT, Optional.of("int8"), 0, Optional.empty(), Optional.empty(), Optional.empty()))
                     .build();
 
     private static final JdbcColumnHandle DOUBLE_COLUMN =
             JdbcColumnHandle.builder()
                     .setColumnName("c_double")
                     .setColumnType(DOUBLE)
-                    .setJdbcTypeHandle(new JdbcTypeHandle(Types.DOUBLE, Optional.of("double"), 0, 0, Optional.empty()))
+                    .setJdbcTypeHandle(new JdbcTypeHandle(Types.DOUBLE, Optional.of("double"), 0, Optional.empty(), Optional.empty(), Optional.empty()))
                     .build();
 
     private static final JdbcClient JDBC_CLIENT = new MySqlClient(

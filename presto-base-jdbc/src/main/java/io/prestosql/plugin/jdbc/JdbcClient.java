@@ -13,6 +13,7 @@
  */
 package io.prestosql.plugin.jdbc;
 
+import io.prestosql.spi.PrestoException;
 import io.prestosql.spi.connector.AggregateFunction;
 import io.prestosql.spi.connector.ColumnHandle;
 import io.prestosql.spi.connector.ColumnMetadata;
@@ -32,6 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+
+import static io.prestosql.spi.StandardErrorCode.NOT_SUPPORTED;
 
 public interface JdbcClient
 {
@@ -85,6 +88,11 @@ public interface JdbcClient
 
     boolean isLimitGuaranteed(ConnectorSession session);
 
+    default void setColumnComment(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column, Optional<String> comment)
+    {
+        throw new PrestoException(NOT_SUPPORTED, "This connector does not support setting column comments");
+    }
+
     void addColumn(ConnectorSession session, JdbcTableHandle handle, ColumnMetadata column);
 
     void dropColumn(JdbcIdentity identity, JdbcTableHandle handle, JdbcColumnHandle column);
@@ -129,4 +137,6 @@ public interface JdbcClient
     String quoted(String name);
 
     String quoted(RemoteTableName remoteTableName);
+
+    Map<String, Object> getTableProperties(JdbcIdentity identity, JdbcTableHandle tableHandle);
 }

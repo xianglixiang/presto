@@ -53,8 +53,8 @@ public class TestHiveSplit
         ImmutableList<HostAddress> addresses = ImmutableList.of(HostAddress.fromParts("127.0.0.1", 44), HostAddress.fromParts("127.0.0.1", 45));
 
         AcidInfo.Builder acidInfoBuilder = AcidInfo.builder(new Path("file:///data/fullacid"));
-        acidInfoBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000004_0000004_0000"), 4L, 4L, 0);
-        acidInfoBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000007_0000007_0000"), 7L, 7L, 0);
+        acidInfoBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000004_0000004_0000"));
+        acidInfoBuilder.addDeleteDelta(new Path("file:///data/fullacid/delete_delta_0000007_0000007_0000"));
         AcidInfo acidInfo = acidInfoBuilder.build().get();
 
         HiveSplit expected = new HiveSplit(
@@ -89,7 +89,7 @@ public class TestHiveSplit
         assertEquals(actual.getPath(), expected.getPath());
         assertEquals(actual.getStart(), expected.getStart());
         assertEquals(actual.getLength(), expected.getLength());
-        assertEquals(actual.getFileSize(), expected.getFileSize());
+        assertEquals(actual.getEstimatedFileSize(), expected.getEstimatedFileSize());
         assertEquals(actual.getSchema(), expected.getSchema());
         assertEquals(actual.getPartitionKeys(), expected.getPartitionKeys());
         assertEquals(actual.getAddresses(), expected.getAddresses());

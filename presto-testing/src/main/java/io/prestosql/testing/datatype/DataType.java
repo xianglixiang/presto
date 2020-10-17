@@ -33,13 +33,15 @@ import java.time.format.DateTimeFormatter;
 import java.util.Optional;
 import java.util.function.Function;
 
+import static com.google.common.base.Preconditions.checkArgument;
 import static com.google.common.io.BaseEncoding.base16;
 import static io.prestosql.spi.type.CharType.createCharType;
 import static io.prestosql.spi.type.Chars.padSpaces;
 import static io.prestosql.spi.type.DateType.DATE;
 import static io.prestosql.spi.type.DecimalType.createDecimalType;
-import static io.prestosql.spi.type.TimeType.TIME;
+import static io.prestosql.spi.type.TimeType.createTimeType;
 import static io.prestosql.spi.type.TimestampType.TIMESTAMP_MILLIS;
+import static io.prestosql.spi.type.TimestampType.createTimestampType;
 import static io.prestosql.spi.type.VarcharType.createUnboundedVarcharType;
 import static io.prestosql.type.JsonType.JSON;
 import static java.lang.String.format;
@@ -176,12 +178,13 @@ public class DataType<T>
                 identity());
     }
 
-    public static DataType<LocalTime> timeDataType()
+    public static DataType<LocalTime> timeDataType(int precision)
     {
+        String pattern = "'TIME '''HH:mm:ss" + (precision == 0 ? "" : ("." + "S".repeat(precision))) + "''";
         return dataType(
-                "time",
-                TIME,
-                DateTimeFormatter.ofPattern("'TIME '''HH:mm:ss.SSS''")::format,
+                format("time(%s)", precision),
+                createTimeType(precision),
+                DateTimeFormatter.ofPattern(pattern)::format,
                 identity());
     }
 
@@ -191,6 +194,25 @@ public class DataType<T>
                 "timestamp",
                 TIMESTAMP_MILLIS,
                 DateTimeFormatter.ofPattern("'TIMESTAMP '''yyyy-MM-dd HH:mm:ss.SSS''")::format,
+                identity());
+    }
+
+    public static DataType<LocalDateTime> timestampDataType(int precision)
+    {
+        // This code does not support precision > 9, due to limitations of DateTimeFormatter. For now it is not needed as
+        // none of currently supported JDBC databases supports precision over 9.
+        checkArgument(precision >= 0 && precision <= 9, "Unsupported precision: %s", precision);
+        DateTimeFormatter dateTimeFormatter;
+        if (precision == 0) {
+            dateTimeFormatter = DateTimeFormatter.ofPattern("'TIMESTAMP '''yyyy-MM-dd HH:mm:ss''");
+        }
+        else {
+            dateTimeFormatter = DateTimeFormatter.ofPattern(format("'TIMESTAMP '''yyyy-MM-dd HH:mm:ss.%s''", "n".repeat(precision)));
+        }
+        return dataType(
+                format("timestamp(%s)", precision),
+                createTimestampType(precision),
+                dateTimeFormatter::format,
                 identity());
     }
 

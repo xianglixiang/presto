@@ -26,6 +26,8 @@ import java.util.concurrent.TimeUnit;
 import static io.airlift.configuration.testing.ConfigAssertions.assertFullMapping;
 import static io.airlift.configuration.testing.ConfigAssertions.assertRecordedDefaults;
 import static io.airlift.configuration.testing.ConfigAssertions.recordDefaults;
+import static io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior.APPEND;
+import static io.prestosql.plugin.hive.HiveSessionProperties.InsertExistingPartitionsBehavior.OVERWRITE;
 import static io.prestosql.plugin.hive.util.TestHiveUtil.nonDefaultTimeZone;
 
 public class TestHiveConfig
@@ -58,6 +60,7 @@ public class TestHiveConfig
                 .setHiveCompressionCodec(HiveCompressionCodec.GZIP)
                 .setRespectTableFormat(true)
                 .setImmutablePartitions(false)
+                .setInsertExistingPartitionsBehavior(APPEND)
                 .setCreateEmptyBucketFiles(false)
                 .setSortedWritingEnabled(true)
                 .setMaxPartitionsPerWriter(100)
@@ -78,9 +81,6 @@ public class TestHiveConfig
                 .setCreatesOfNonManagedTablesEnabled(true)
                 .setPartitionStatisticsSampleSize(100)
                 .setIgnoreCorruptedStatistics(false)
-                .setRecordingPath(null)
-                .setRecordingDuration(new Duration(10, TimeUnit.MINUTES))
-                .setReplay(false)
                 .setCollectColumnStatisticsOnWrite(true)
                 .setS3SelectPushdownEnabled(false)
                 .setS3SelectPushdownMaxConnections(500)
@@ -95,7 +95,9 @@ public class TestHiveConfig
                 .setAllowRegisterPartition(false)
                 .setQueryPartitionFilterRequired(false)
                 .setPartitionUseColumnNames(false)
-                .setProjectionPushdownEnabled(true));
+                .setProjectionPushdownEnabled(true)
+                .setDynamicFilteringProbeBlockingTimeout(new Duration(0, TimeUnit.MINUTES))
+                .setTimestampPrecision(HiveTimestampPrecision.MILLISECONDS));
     }
 
     @Test
@@ -123,6 +125,7 @@ public class TestHiveConfig
                 .put("hive.compression-codec", "NONE")
                 .put("hive.respect-table-format", "false")
                 .put("hive.immutable-partitions", "true")
+                .put("hive.insert-existing-partitions-behavior", "OVERWRITE")
                 .put("hive.create-empty-bucket-files", "true")
                 .put("hive.max-partitions-per-writers", "222")
                 .put("hive.max-open-sort-files", "333")
@@ -146,9 +149,6 @@ public class TestHiveConfig
                 .put("hive.non-managed-table-creates-enabled", "false")
                 .put("hive.partition-statistics-sample-size", "1234")
                 .put("hive.ignore-corrupted-statistics", "true")
-                .put("hive.metastore-recording-path", "/foo/bar")
-                .put("hive.metastore-recording-duration", "42s")
-                .put("hive.replay-metastore-recording", "true")
                 .put("hive.collect-column-statistics-on-write", "false")
                 .put("hive.s3select-pushdown.enabled", "true")
                 .put("hive.s3select-pushdown.max-connections", "1234")
@@ -164,6 +164,8 @@ public class TestHiveConfig
                 .put("hive.query-partition-filter-required", "true")
                 .put("hive.partition-use-column-names", "true")
                 .put("hive.projection-pushdown-enabled", "false")
+                .put("hive.dynamic-filtering-probe-blocking-timeout", "10s")
+                .put("hive.timestamp-precision", "NANOSECONDS")
                 .build();
 
         HiveConfig expected = new HiveConfig()
@@ -191,6 +193,7 @@ public class TestHiveConfig
                 .setHiveCompressionCodec(HiveCompressionCodec.NONE)
                 .setRespectTableFormat(false)
                 .setImmutablePartitions(true)
+                .setInsertExistingPartitionsBehavior(OVERWRITE)
                 .setCreateEmptyBucketFiles(true)
                 .setMaxPartitionsPerWriter(222)
                 .setMaxOpenSortFiles(333)
@@ -211,9 +214,6 @@ public class TestHiveConfig
                 .setCreatesOfNonManagedTablesEnabled(false)
                 .setPartitionStatisticsSampleSize(1234)
                 .setIgnoreCorruptedStatistics(true)
-                .setRecordingPath("/foo/bar")
-                .setRecordingDuration(new Duration(42, TimeUnit.SECONDS))
-                .setReplay(true)
                 .setCollectColumnStatisticsOnWrite(false)
                 .setS3SelectPushdownEnabled(true)
                 .setS3SelectPushdownMaxConnections(1234)
@@ -228,7 +228,9 @@ public class TestHiveConfig
                 .setAllowRegisterPartition(true)
                 .setQueryPartitionFilterRequired(true)
                 .setPartitionUseColumnNames(true)
-                .setProjectionPushdownEnabled(false);
+                .setProjectionPushdownEnabled(false)
+                .setDynamicFilteringProbeBlockingTimeout(new Duration(10, TimeUnit.SECONDS))
+                .setTimestampPrecision(HiveTimestampPrecision.NANOSECONDS);
 
         assertFullMapping(properties, expected);
     }

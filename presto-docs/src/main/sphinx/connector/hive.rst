@@ -181,6 +181,8 @@ The properties that apply to Hive connector security are listed in the
 :doc:`/connector/hive-security` section for a more detailed discussion of the
 security options in the Hive connector.
 
+.. _hive_configuration_properties:
+
 Hive Configuration Properties
 -----------------------------
 
@@ -215,6 +217,20 @@ Property Name                                      Description                  
                                                    format or the default Presto format?
 
 ``hive.immutable-partitions``                      Can new data be inserted into existing partitions?           ``false``
+                                                   If ``true`` then setting
+                                                   ``hive.insert-existing-partitions-behavior`` to ``APPEND``
+                                                   is not allowed.
+                                                   This also affects the
+                                                   ``insert_existing_partitions_behavior``
+                                                   session property in the same way.
+
+``hive.insert-existing-partitions-behavior``       What happens when data is inserted into an existing          ``APPEND``
+                                                   partition?
+                                                   Possible values are
+
+                                                   * ``APPEND`` - appends data to existing partitions
+                                                   * ``OVERWRITE`` - overwrites existing partitions
+                                                   * ``ERROR`` - modifying existing partitions is not allowed
 
 ``hive.create-empty-bucket-files``                 Should empty files be created for buckets that have no data? ``false``
 
@@ -263,14 +279,19 @@ Property Name                                      Description                  
 ``hive.file-status-cache-expire-time``             How long a cached directory listing should be considered     ``1m``
                                                    valid.
 
-``hive.parquet.time-zone``                         Adjusts timestamp values to a specific time zone.     	JVM default  
-                                                   For Hive 3.1+, this should be set to UTC. 
+``hive.parquet.time-zone``                         Adjusts timestamp values to a specific time zone.     	JVM default
+                                                   For Hive 3.1+, this should be set to UTC.
 
-``hive.rcfile.time-zone``                          Adjusts binary encoded timestamp values to a specific	JVM default  
-                                                   time zone. For Hive 3.1+, this should be set to UTC. 
+``hive.rcfile.time-zone``                          Adjusts binary encoded timestamp values to a specific	JVM default
+                                                   time zone. For Hive 3.1+, this should be set to UTC.
 
-``hive.orc.time-zone``                             Sets the default time zone for legacy ORC files that did	JVM default        
+``hive.orc.time-zone``                             Sets the default time zone for legacy ORC files that did	JVM default
                                                    not declare a time zone.
+
+``hive.timestamp-precision``                       Specifies the precision to use for columns of type 	        ``MILLISECONDS``
+                                                   ``timestamp``. Possible values are ``MILLISECONDS``,
+                                                   ``MICROSECONDS`` and ``NANOSECONDS``. Write operations
+                                                   are only supported for ``MILLISECONDS``.
 
 ``hive.temporary-staging-directory-enabled``       Controls whether the temporary staging directory configured  ``true``
                                                    at ``hive.temporary-staging-directory-path`` should be
@@ -314,6 +335,10 @@ Property Name                                      Description                  
 ``hive.metastore-refresh-max-threads``  Maximum threads used to refresh cached metastore data.        100
 
 ``hive.metastore-timeout``              Timeout for Hive metastore requests.                         ``10s``
+
+``hive.hide-delta-lake-tables``         Controls whether to hide Delta Lake tables in table          false
+                                        listings. Currently applies only when using the AWS Glue
+                                        metastore.
 ======================================= ============================================================ ============
 
 Thrift Metastore Configuration Properties
@@ -504,6 +529,34 @@ before re-analyzing just a subset::
 You can also drop statistics for selected partitions only::
 
     CALL system.drop_stats(schema_name, table_name, ARRAY[ARRAY['p2_value1', 'p2_value2']])
+
+Dynamic Filtering
+-----------------
+
+The Hive connector supports the :doc:`dynamic filtering </admin/dynamic-filtering>` optimization.
+Dynamic partition pruning is supported for partitioned tables stored in any file format
+for broadcast as well as partitioned joins.
+
+For tables stored in ORC or Parquet file format, dynamic filters are also pushed into
+local table scan on worker nodes for broadcast joins. Dynamic filter predicates
+pushed into the ORC and Parquet readers are used to perform stripe or row-group pruning
+and save on disk I/O. Sorting the data within ORC or Parquet files by the columns used in
+join criteria significantly improves the effectiveness of stripe or row-group pruning.
+This is because grouping similar data within the same stripe or row-group
+greatly improves the selectivity of the min/max indexes maintained at stripe or
+row-group level.
+
+Delaying execution for dynamic filters
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+It can often be beneficial to wait for the collection of dynamic filters before starting
+a table scan. This extra wait time can potentially result in significant overall savings
+in query and CPU time, if dynamic filtering is able to reduce the amount of scanned data.
+
+For the Hive connector, a table scan can be delayed for a configured amount of
+time until the collection of dynamic filters by using the configuration property
+``hive.dynamic-filtering-probe-blocking-timeout`` in the catalog file or the catalog
+session property ``<hive-catalog>.dynamic_filtering_probe_blocking_timeout``.
 
 Schema Evolution
 ----------------

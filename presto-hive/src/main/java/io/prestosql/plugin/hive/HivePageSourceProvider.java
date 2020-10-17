@@ -27,6 +27,7 @@ import io.prestosql.spi.connector.ConnectorSession;
 import io.prestosql.spi.connector.ConnectorSplit;
 import io.prestosql.spi.connector.ConnectorTableHandle;
 import io.prestosql.spi.connector.ConnectorTransactionHandle;
+import io.prestosql.spi.connector.DynamicFilter;
 import io.prestosql.spi.connector.EmptyPageSource;
 import io.prestosql.spi.connector.RecordCursor;
 import io.prestosql.spi.connector.RecordPageSource;
@@ -64,20 +65,22 @@ public class HivePageSourceProvider
 {
     private final TypeManager typeManager;
     private final HdfsEnvironment hdfsEnvironment;
+    private final int domainCompactionThreshold;
     private final Set<HivePageSourceFactory> pageSourceFactories;
     private final Set<HiveRecordCursorProvider> cursorProviders;
 
     @Inject
     public HivePageSourceProvider(
             TypeManager typeManager,
-            HiveConfig hiveConfig,
             HdfsEnvironment hdfsEnvironment,
+            HiveConfig hiveConfig,
             Set<HivePageSourceFactory> pageSourceFactories,
             Set<HiveRecordCursorProvider> cursorProviders,
             GenericHiveRecordCursorProvider genericCursorProvider)
     {
         this.typeManager = requireNonNull(typeManager, "typeManager is null");
         this.hdfsEnvironment = requireNonNull(hdfsEnvironment, "hdfsEnvironment is null");
+        this.domainCompactionThreshold = requireNonNull(hiveConfig, "hiveConfig is null").getDomainCompactionThreshold();
         this.pageSourceFactories = ImmutableSet.copyOf(requireNonNull(pageSourceFactories, "pageSourceFactories is null"));
         this.cursorProviders = ImmutableSet.<HiveRecordCursorProvider>builder()
                 .addAll(requireNonNull(cursorProviders, "cursorProviders is null"))
@@ -86,7 +89,7 @@ public class HivePageSourceProvider
     }
 
     @Override
-    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, ConnectorTableHandle table, List<ColumnHandle> columns, TupleDomain<ColumnHandle> dynamicFilter)
+    public ConnectorPageSource createPageSource(ConnectorTransactionHandle transaction, ConnectorSession session, ConnectorSplit split, ConnectorTableHandle table, List<ColumnHandle> columns, DynamicFilter dynamicFilter)
     {
         HiveTableHandle hiveTable = (HiveTableHandle) table;
 
@@ -99,6 +102,9 @@ public class HivePageSourceProvider
 
         Configuration configuration = hdfsEnvironment.getConfiguration(new HdfsContext(session, hiveSplit.getDatabase(), hiveSplit.getTable()), path);
 
+        TupleDomain<HiveColumnHandle> simplifiedDynamicFilter = dynamicFilter
+                .getCurrentPredicate()
+                .transform(HiveColumnHandle.class::cast).simplify(domainCompactionThreshold);
         Optional<ConnectorPageSource> pageSource = createHivePageSource(
                 pageSourceFactories,
                 cursorProviders,
@@ -108,10 +114,10 @@ public class HivePageSourceProvider
                 hiveSplit.getBucketNumber(),
                 hiveSplit.getStart(),
                 hiveSplit.getLength(),
-                hiveSplit.getFileSize(),
+                hiveSplit.getEstimatedFileSize(),
                 hiveSplit.getFileModifiedTime(),
                 hiveSplit.getSchema(),
-                hiveTable.getCompactEffectivePredicate().intersect(dynamicFilter.transform(HiveColumnHandle.class::cast).simplify()),
+                hiveTable.getCompactEffectivePredicate().intersect(simplifiedDynamicFilter),
                 hiveColumns,
                 hiveSplit.getPartitionName(),
                 hiveSplit.getPartitionKeys(),
@@ -135,7 +141,7 @@ public class HivePageSourceProvider
             OptionalInt bucketNumber,
             long start,
             long length,
-            long fileSize,
+            long estimatedFileSize,
             long fileModifiedTime,
             Properties schema,
             TupleDomain<HiveColumnHandle> effectivePredicate,
@@ -160,7 +166,7 @@ public class HivePageSourceProvider
                 tableToPartitionMapping,
                 path,
                 bucketNumber,
-                fileSize,
+                estimatedFileSize,
                 fileModifiedTime);
         List<ColumnMapping> regularAndInterimColumnMappings = ColumnMapping.extractRegularAndInterimColumnMappings(columnMappings);
 
@@ -175,7 +181,7 @@ public class HivePageSourceProvider
                     path,
                     start,
                     length,
-                    fileSize,
+                    estimatedFileSize,
                     schema,
                     desiredColumns,
                     effectivePredicate,
@@ -210,7 +216,7 @@ public class HivePageSourceProvider
                     path,
                     start,
                     length,
-                    fileSize,
+                    estimatedFileSize,
                     schema,
                     desiredColumns,
                     effectivePredicate,
@@ -342,7 +348,7 @@ public class HivePageSourceProvider
                 TableToPartitionMapping tableToPartitionMapping,
                 Path path,
                 OptionalInt bucketNumber,
-                long fileSize,
+                long estimatedFileSize,
                 long fileModifiedTime)
         {
             Map<String, HivePartitionKey> partitionKeysByName = uniqueIndex(partitionKeys, HivePartitionKey::getName);
@@ -363,7 +369,7 @@ public class HivePageSourceProvider
                     }
 
                     checkArgument(
-                            projectionsForColumn.computeIfAbsent(column.getBaseHiveColumnIndex(), HashSet::new).add(column.getHiveColumnProjectionInfo()),
+                            projectionsForColumn.computeIfAbsent(column.getBaseHiveColumnIndex(), columnIndex -> new HashSet<>()).add(column.getHiveColumnProjectionInfo()),
                             "duplicate column in columns list");
 
                     // Add regular mapping if projection is valid for partition schema, otherwise add an empty mapping
@@ -379,7 +385,7 @@ public class HivePageSourceProvider
                 else {
                     columnMappings.add(prefilled(
                             column,
-                            getPrefilledColumnValue(column, partitionKeysByName.get(column.getName()), path, bucketNumber, fileSize, fileModifiedTime, partitionName),
+                            getPrefilledColumnValue(column, partitionKeysByName.get(column.getName()), path, bucketNumber, estimatedFileSize, fileModifiedTime, partitionName),
                             baseTypeCoercionFrom));
                 }
             }

@@ -7,7 +7,7 @@ Synopsis
 
 .. code-block:: none
 
-    [ WITH with_query [, ...] ]
+    [ WITH [ RECURSIVE ] with_query [, ...] ]
     SELECT [ ALL | DISTINCT ] select_expression [, ...]
     [ FROM from_item [, ...] ]
     [ WHERE condition ]
@@ -91,6 +91,77 @@ Additionally, the relations within a ``WITH`` clause can chain::
     Currently, the SQL for the ``WITH`` clause will be inlined anywhere the named
     relation is used. This means that if the relation is used more than once and the query
     is non-deterministic, the results may be different each time.
+
+WITH RECURSIVE Clause
+---------------------
+
+The ``WITH RECURSIVE`` clause is a variant of the ``WITH`` clause. It defines
+a list of queries to process, including recursive processing of suitable
+queries.
+
+.. warning::
+
+    This feature is experimental only. Proceed to use it only if you understand
+    potential query failures and the impact of the recursion processing on your
+    workload.
+
+A recursive ``WITH``-query must be shaped as a ``UNION`` of two relations. The
+first relation is called the *recursion base*, and the second relation is called
+the *recursion step*. Presto supports recursive ``WITH``-queries with a single
+recursive reference to a ``WITH``-query from within the query. The name ``T`` of
+the query ``T`` can be mentioned once in the ``FROM`` clause of the recursion
+step relation.
+
+The following listing shows a simple example, that displays a commonly used
+form of a single query in the list:
+
+.. code-block:: none
+
+    WITH RECURSIVE t(n) AS (
+        VALUES (1)
+        UNION ALL
+        SELECT n + 1 FROM t WHERE n < 4
+    )
+    SELECT sum(n) FROM t;
+
+In the preceding query the simple assignment ``VALUES (1)`` defines the
+recursion base relation. ``SELECT n + 1 FROM t WHERE n < 4`` defines the
+recursion step relation. The recursion processing performs these steps:
+
+- recursive base yields ``1``
+- first recursion yields ``1 + 1 = 2``
+- second recursion uses the result from the first and adds one: ``2 + 1 = 3``
+- third recursion uses the result from the second and adds one again:
+  ``3 + 1 = 4``
+- fourth recursion aborts since ``n = 4``
+- this results in ``t`` having values ``1``, ``2``, ``3`` and ``4``
+- the final statement performs the sum operation of these elements with the
+  final result value ``10``
+
+The types of the returned columns are those of the base relation. Therefore it
+is required that types in the step relation can be coerced to base relation
+types.
+
+The ``RECURSIVE`` clause applies to all queries in the ``WITH`` list, but not
+all of them must be recursive. If a ``WITH``-query is not shaped according to
+the rules mentioned above or it does not contain a recursive reference, it is
+processed like a regular ``WITH``-query. Column aliases are mandatory for all
+the queries in the recursive ``WITH`` list.
+
+The following limitations apply as a result of following the SQL standard and
+due to implementation choices, in addition to ``WITH`` clause limitations:
+
+- only single-element recursive cycles are supported. Like in regular
+  ``WITH``-queries, references to previous queries in the ``WITH`` list are
+  allowed. References to following queries are forbidden.
+- usage of outer joins, set operations, limit clause, and others is not always
+  allowed in the step relation
+- recursion depth is fixed, defaults to ``10``, and doesn't depend on the actual
+  query results
+
+You can adjust the recursion depth with the :doc:`session property
+</sql/set-session>` ``max_recursion_depth``. When changing the value consider
+that the size of the query plan growth is quadratic with the recursion depth.
 
 SELECT Clause
 -------------
@@ -323,7 +394,8 @@ is equivalent to::
         (origin_state, destination_state),
         (origin_state),
         (destination_state),
-        ());
+        ()
+    );
 
 .. code-block:: none
 
@@ -399,7 +471,8 @@ is logically equivalent to::
     FROM shipping
     GROUP BY GROUPING SETS (
         (origin_state, destination_state, origin_zip),
-        (origin_state, destination_state));
+        (origin_state, destination_state)
+    );
 
 .. code-block:: none
 
@@ -444,7 +517,8 @@ is equivalent to::
         (origin_state, destination_state),
         (origin_state),
         (destination_state),
-        ());
+        ()
+    );
 
 However, if the query uses the ``DISTINCT`` quantifier for the ``GROUP BY``::
 
@@ -464,7 +538,8 @@ only unique grouping sets are generated::
         (origin_state, destination_state),
         (origin_state),
         (destination_state),
-        ());
+        ()
+    );
 
 The default set quantifier is ``ALL``.
 
@@ -487,9 +562,10 @@ below::
            grouping(origin_state, origin_zip, destination_state)
     FROM shipping
     GROUP BY GROUPING SETS (
-            (origin_state),
-            (origin_state, origin_zip),
-            (destination_state));
+        (origin_state),
+        (origin_state, origin_zip),
+        (destination_state)
+    );
 
 .. code-block:: none
 
@@ -695,7 +771,7 @@ In the following example, the clause only applies to the select statement.
 
     INSERT INTO some_table
     SELECT * FROM another_table
-    ORDER BY field
+    ORDER BY field;
 
 Since tables in SQL are inherently unordered, and the ``ORDER BY`` clause in
 this case does not result in any difference, but negatively impacts performance
@@ -709,7 +785,7 @@ the outcome of the overall statement, is a nested query:
     SELECT *
     FROM some_table
         JOIN (SELECT * FROM another_table ORDER BY field) u
-        ON some_table.key = u.key
+        ON some_table.key = u.key;
 
 More background information and details can be found in
 `a blog post about this optimization <https://prestosql.io/blog/2019/06/03/redundant-order-by.html>`_.
@@ -817,7 +893,9 @@ clause be present. The result set consists of the same set of leading rows
 and all of the rows in the same peer group as the last of them ('ties')
 as established by the ordering in the ``ORDER BY`` clause. The result set is sorted::
 
-    SELECT name, regionkey FROM nation ORDER BY regionkey FETCH FIRST ROW WITH TIES;
+    SELECT name, regionkey 
+    FROM nation 
+    ORDER BY regionkey FETCH FIRST ROW WITH TIES;
 
 .. code-block:: none
 
@@ -1005,7 +1083,7 @@ computing the rows to be joined::
     SELECT name, x, y
     FROM nation
     CROSS JOIN LATERAL (SELECT name || ' :-' AS x)
-    CROSS JOIN LATERAL (SELECT x || ')' AS y)
+    CROSS JOIN LATERAL (SELECT x || ')' AS y);
 
 Qualifying Column Names
 ^^^^^^^^^^^^^^^^^^^^^^^
@@ -1050,7 +1128,11 @@ The ``EXISTS`` predicate determines if a subquery returns any rows::
 
     SELECT name
     FROM nation
-    WHERE EXISTS (SELECT * FROM region WHERE region.regionkey = nation.regionkey)
+    WHERE EXISTS (
+         SELECT * 
+         FROM region 
+         WHERE region.regionkey = nation.regionkey
+    );
 
 IN
 ^^
@@ -1061,7 +1143,11 @@ standard rules for nulls. The subquery must produce exactly one column::
 
     SELECT name
     FROM nation
-    WHERE regionkey IN (SELECT regionkey FROM region)
+    WHERE regionkey IN (
+         SELECT regionkey 
+         FROM region
+         WHERE name = 'AMERICA' OR name = 'AFRICA'
+    );
 
 Scalar Subquery
 ^^^^^^^^^^^^^^^
@@ -1072,6 +1158,6 @@ row. The returned value is ``NULL`` if the subquery produces no rows::
 
     SELECT name
     FROM nation
-    WHERE regionkey = (SELECT max(regionkey) FROM region)
+    WHERE regionkey = (SELECT max(regionkey) FROM region);
 
 .. note:: Currently only single column can be returned from the scalar subquery.
